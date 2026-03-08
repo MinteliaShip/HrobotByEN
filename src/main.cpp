@@ -4,9 +4,6 @@
 #include "PS4Controller_support.h"
 #include "esp_timer.h"
 
-// put function declarations here:
-int myFunction(int, int);
-
 servoICS::Servo servo1;
 PS4Controller_support Dualshock4;
 
@@ -26,17 +23,16 @@ int executionCycil( double cycilTime, double offsetTime, double fps, void (*p_fu
 
 void setup() {
   // put your setup code here, to run once:
-  Dualshock4.begin("12:04:00:00:05:05");
+  Dualshock4.begin("12:04:00:00:05:03");
   Dualshock4.update();
-  
-  int result = myFunction(2, 3);
+
+  Serial.begin(115200);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+  if (PS4.isConnected()) {
+    Dualshock4.update();
+    Serial.printf("Right:%d Down:%d Up:%d Left:%d Square:%d Cross:%d Circle:%d Triangle:%d UpRight:%d DownRight:%d UpLeft:%d DownLeft:%d\n", Dualshock4.Right(), Dualshock4.Down(), Dualshock4.Up(), Dualshock4.Left(), Dualshock4.Square(), Dualshock4.Cross(), Dualshock4.Circle(), Dualshock4.Triangle(), Dualshock4.UpRight(), Dualshock4.DownRight(), Dualshock4.UpLeft(), Dualshock4.DownLeft());
+    delay(1);
+  }
 }
