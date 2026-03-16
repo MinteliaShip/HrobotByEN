@@ -3,11 +3,12 @@
 
 #include "FootIK.h"
 #include "PS4Controller_support.h"
+#include "controller_to_command.h"
 #include "esp_timer.h"
+
 
 #include <math.h>
 
-#define PI 3.14159265358979323846
 
 
 
@@ -60,7 +61,6 @@ float tread_x(float Wd,float T,float Duty,float ts_){
 
 servoICS::Servo servo1;
 PS4Controller_support Dualshock4;
-PS4Controller_support* DS4 = &Dualshock4;
 
 
 
@@ -93,7 +93,7 @@ int executionCycil(float cycilTime, float offsetTime, float fps, void (*p_func)(
 }
 
 
-
+/*
 namespace walk{
   float x,y;
 
@@ -166,7 +166,7 @@ namespace walk{
     executionCycil(T,0,fps,treadxy);
   } 
 }
-
+*/
 
 
 void setup() {
@@ -193,36 +193,35 @@ void setup() {
 
 int64_t setTime;
 
+
+ControllerApp::CommandConverter OpeCom(&Dualshock4.data_support);
+ControllerApp::Commands cmd;
+
+
 void loop() {
   if (Dualshock4.isConnected()) {
     Dualshock4.update();
-    walk::update();
+    OpeCom.update();
+    cmd = OpeCom.getCommands();
 
-    walk::walk_play(5,20,10,10,0.4,0.3);
+    char str[1024];
 
-    setTime = esp_timer_get_time();
-    delay(1);
-    Serial.printf("time_delay:%lld\n",esp_timer_get_time()-setTime);
+    sprintf(str,
+    "[controller]\n"
+    "[X]:%.2f [Y]:%.2f\n"
+    "[isAttack1]:%d [isAttack2]:%d [isAttack3]:%d [isAttack4]:%d\n"
+    "[isGetup]:%d [isSquat]:%d\n",
+    cmd.moveSpeed.x, cmd.moveSpeed.y,
+    cmd.isAttack1, cmd.isAttack2, cmd.isAttack3, cmd.isAttack4,
+    cmd.isGetup, cmd.isSquat
+    );
 
-    setTime = esp_timer_get_time();
-    sin(45);
-    Serial.printf("time_sin:%lld\n",esp_timer_get_time()-setTime);
+    Serial.printf(str);
+ 
 
-    setTime = esp_timer_get_time();
-    delayMicroseconds(1000);
-    Serial.printf("time_delay_mico:%lld\n",esp_timer_get_time()-setTime);
-    
-    setTime = esp_timer_get_time();
-    FootIK::Pose poses_={
-      200,100,0,
-      0,0,0
-    };
-    FootIK::leng8 lengs8={60,100,40,100,100,40,100,60};
-    FootIK::IK(poses_, lengs8,0);
-    Serial.printf("time3:%lld\n",esp_timer_get_time()-setTime);
 
-    
 
-    //delay(2000);
+
+    delay(100);
   }
 }
