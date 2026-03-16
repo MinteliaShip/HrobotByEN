@@ -16,7 +16,12 @@ servoICS::Servo servo1;
 PS4Controller_support Dualshock4;
 ControllerApp::CommandConverter OpeCom(&Dualshock4.data_support);
 const char ControllerMac[18] = "06:02:01:02:05:10";
-const long bpsPC = 250000;
+const long bpsPC = 115200;
+//サーボとの通信設定
+HardwareSerial* ServoSerial = &Serial1;
+const char enPin = 23;
+const char txPin = 33;
+const char rxPin = 19;
 const long bpsServo = 115200;
 
 
@@ -43,7 +48,6 @@ float tread_y(float h,float T,float Duty,float ts_){
 }
 
 
-
 float tread_x(float Wd,float T,float Duty,float ts_){
 
     float A  = 2*Wd / (1-Duty);
@@ -66,9 +70,6 @@ float tread_x(float Wd,float T,float Duty,float ts_){
     return x_;
 }
  
-
-
-
 
 int executionCycil(float cycilTime, float offsetTime, float fps, void (*p_func)(float)) {
     int64_t start_time = esp_timer_get_time();
@@ -175,7 +176,6 @@ namespace walk{
 */
 
 
-
 void WaitCom(){
   if (Dualshock4.isConnected()) {
     Dualshock4.update();
@@ -223,9 +223,13 @@ void setup() {
 
 
   Serial.begin(bpsPC);
-  // put your setup code here, to run once:
+  ServoSerial->begin(bpsServo,SERIAL_8E1,rxPin,txPin);  //SERIAL_8E1がICS規格で使用されている。
+
   Dualshock4.begin(ControllerMac);
   Dualshock4.update();
+
+  servo1.attach((Stream*)ServoSerial,enPin,0);
+  servo1.setPos(0);
 
 
   FootIK::Pose poses_={
