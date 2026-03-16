@@ -11,6 +11,15 @@
 
 
 
+/*宣言・初期化・定数*/
+servoICS::Servo servo1;
+PS4Controller_support Dualshock4;
+ControllerApp::CommandConverter OpeCom(&Dualshock4.data_support);
+const char ControllerMac[18] = "06:02:01:02:05:10";
+const long bpsPC = 250000;
+const long bpsServo = 115200;
+
+
 
 float tread_y(float h,float T,float Duty,float ts_){
     float A  = 2*h / (1-Duty);
@@ -58,9 +67,6 @@ float tread_x(float Wd,float T,float Duty,float ts_){
 }
  
 
-
-servoICS::Servo servo1;
-PS4Controller_support Dualshock4;
 
 
 
@@ -169,12 +175,56 @@ namespace walk{
 */
 
 
+
+void WaitCom(){
+  if (Dualshock4.isConnected()) {
+    Dualshock4.update();
+    OpeCom.update();
+    ControllerApp::Commands cmd = OpeCom.getCommands();
+
+    char str[1024];
+
+    sprintf(str,
+    "[controller]\n"
+    "[X]:%.2f [Y]:%.2f\n"
+    "[isAttack1]:%d [isAttack2]:%d [isAttack3]:%d [isAttack4]:%d\n"
+    "[isGetup]:%d [isSquat]:%d\n",
+    cmd.moveSpeed.x, cmd.moveSpeed.y,
+    cmd.isAttack1, cmd.isAttack2, cmd.isAttack3, cmd.isAttack4,
+    cmd.isGetup, cmd.isSquat
+    );
+
+    Serial.printf(str);
+
+    if(cmd.moveSpeed.y != 0 || cmd.moveSpeed.x != 0){
+      //並行移動
+    }else if(cmd.moveAngle != 0){
+      //水平視点移動
+    }else if(cmd.isAttack1){
+      //攻撃１
+    }else if(cmd.isAttack2){
+      //攻撃２
+    }else if(cmd.isAttack3){
+      //攻撃３
+    }else if(cmd.isAttack4){
+      //攻撃４  
+    }else if(cmd.isGetup){
+      //起き上がり
+    }else if(cmd.isSquat){
+      //しゃがみ
+    }
+
+    
+  }
+
+}
+
 void setup() {
 
 
-  Serial.begin(115200);
+  Serial.begin(bpsPC);
   // put your setup code here, to run once:
-  Dualshock4.begin("06:02:01:02:05:10");
+  Dualshock4.begin(ControllerMac);
   Dualshock4.update();
 
 
@@ -194,34 +244,8 @@ void setup() {
 int64_t setTime;
 
 
-ControllerApp::CommandConverter OpeCom(&Dualshock4.data_support);
-ControllerApp::Commands cmd;
-
 
 void loop() {
-  if (Dualshock4.isConnected()) {
-    Dualshock4.update();
-    OpeCom.update();
-    cmd = OpeCom.getCommands();
-
-    char str[1024];
-
-    sprintf(str,
-    "[controller]\n"
-    "[X]:%.2f [Y]:%.2f\n"
-    "[isAttack1]:%d [isAttack2]:%d [isAttack3]:%d [isAttack4]:%d\n"
-    "[isGetup]:%d [isSquat]:%d\n",
-    cmd.moveSpeed.x, cmd.moveSpeed.y,
-    cmd.isAttack1, cmd.isAttack2, cmd.isAttack3, cmd.isAttack4,
-    cmd.isGetup, cmd.isSquat
-    );
-
-    Serial.printf(str);
- 
-
-
-
-
-    delay(100);
-  }
+  WaitCom();
+  delay(500);
 }
