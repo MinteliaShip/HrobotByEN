@@ -7,7 +7,17 @@
 #include "esp_timer.h"
 
 
+
 #include <math.h>
+
+
+struct {
+  char J1;
+  char J2;
+  char J3;
+  char J4;
+  char J5;
+}typedef footServoID;
 
 
 
@@ -23,6 +33,10 @@ const char enPin = 23;
 const char txPin = 33;
 const char rxPin = 19;
 const long bpsServo = 115200;
+//サーボの設定。
+footServoID footRight = {0,1,2,3,4};
+
+
 
 
 
@@ -219,10 +233,24 @@ void WaitCom(){
 
 }
 
+servoICS::Servo servoDemo;
+
 void setup() {
 
 
-  Serial.begin(bpsPC);
+  Serial.begin(bpsPC,SERIAL_8E1);
+  servoDemo.attach(&Serial,0,3);
+  
+  while(1){
+    for(float i = -100;i < 100;i+=0.1){
+      servoDemo.setPosDeg(i);
+      delay(10);
+    }
+    delay(1000);
+  }
+
+
+
   ServoSerial->begin(bpsServo,SERIAL_8E1,rxPin,txPin);  //SERIAL_8E1がICS規格で使用されている。
 
   Dualshock4.begin(ControllerMac);
