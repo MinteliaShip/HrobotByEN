@@ -34,7 +34,13 @@ const char rxPin = 19;
 const long bpsServo = 115200;
 //サーボの設定。
 footServoID footRight = {0,1,2,3,4};
-
+//歩行関数定数
+float MV_X_T = 1;
+float MV_X_fps = 20;
+float MV_X_h = 10;
+float MV_X_Wd = 10;
+float MV_X_DutyX = 0.4;
+float MV_X_DutyY = 0.45;
 
 
 
@@ -112,6 +118,21 @@ int executionCycil(float cycilTime, float offsetTime, float fps, void (*p_func)(
     return 0;
 }
 
+bool MV_X_F(float T, float fps, float h, float Wd, float DutyX, float DutyY, long motionTime){
+
+  float y = tread_y(h,T,DutyY,motionTime*0.001);
+  float x = tread_x(Wd,T,DutyX,motionTime*0.001);
+
+  //グラフ作成[*,+]
+  for(int i=-50;i<int(y);i++){
+      Serial.printf("*");
+  }
+  Serial.printf("\n");
+  for(int i=-50;i<int(x);i++){
+      Serial.printf("+");
+  }
+  Serial.printf("\n");
+}
 
 /*
 namespace walk{
@@ -189,48 +210,111 @@ namespace walk{
 */
 
 
-void WaitCom(){
+
+enum RobotState {
+  IDLE,
+  MV_X,
+  MV_Y,
+  MV_TURN,
+  ACT_ATTACK1,
+  ACT_ATTACK2,
+  ACT_ATTACK3,
+  ACT_ATTACK4,
+  ACT_GETUP
+};
+
+RobotState robotState = IDLE;
+
+int lastRecvTime=0;
+bool stateUpdate(){
+  RobotState robotStateLast = robotState;
   if (Dualshock4.isConnected()) {
     Dualshock4.update();
     OpeCom.update();
     ControllerApp::Commands cmd = OpeCom.getCommands();
 
-    char str[1024];
-
-    sprintf(str,
-    "[controller]\n"
-    "[X]:%.2f [Y]:%.2f\n"
-    "[isAttack1]:%d [isAttack2]:%d [isAttack3]:%d [isAttack4]:%d\n"
-    "[isGetup]:%d [isSquat]:%d\n",
-    cmd.moveSpeed.x, cmd.moveSpeed.y,
-    cmd.isAttack1, cmd.isAttack2, cmd.isAttack3, cmd.isAttack4,
-    cmd.isGetup, cmd.isSquat
-    );
-
-    Serial.printf(str);
-
-    if(cmd.moveSpeed.y != 0 || cmd.moveSpeed.x != 0){
-      //並行移動
+    if(cmd.moveSpeed.x != 0){
+      //前進後退
+      robotState = MV_X;
+    }else if(cmd.moveSpeed.y != 0){
+      //左右移動
+      robotState = MV_Y;
     }else if(cmd.moveAngle != 0){
-      //水平視点移動
+      //方向変更
+      robotState = MV_TURN;
     }else if(cmd.isAttack1){
       //攻撃１
+      robotState = ACT_ATTACK1;
     }else if(cmd.isAttack2){
       //攻撃２
+      robotState = ACT_ATTACK2;
     }else if(cmd.isAttack3){
       //攻撃３
+      robotState = ACT_ATTACK3;
     }else if(cmd.isAttack4){
       //攻撃４  
+      robotState = ACT_ATTACK4;
     }else if(cmd.isGetup){
       //起き上がり
-    }else if(cmd.isSquat){
-      //しゃがみ
+      robotState = ACT_GETUP;
+    }else{
+      //IDLE
+      robotState = IDLE;
     }
+    lastRecvTime = millis();
+  }else{
+    if(lastRecvTime+1000 < millis()){//最終接続から1秒経過しても接続されない場合。
+      robotState = IDLE;
+    }
+  }
 
-    
+  if(robotStateLast != robotStateLast){//変化があれば1 なければ0
+    return 1;
+  }else{
+    return 0;
   }
 
 }
+
+
+// モーションの進捗管理用
+int motionStep = 0;
+long motionTimeOrigin = 0;
+void motorTask(void *pvParameters) {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = pdMS_TO_TICKS(20); 
+
+  while(1){
+    if (stateUpdate()) {
+      motionStep = 0; 
+      motionTimeOrigin = millis(); 
+    }
+    long motionTime = millis() - motionTimeOrigin;
+
+
+    switch (robotState) {
+      case MV_X:
+        if(MV_X_F(MV_X_T, MV_X_fps, MV_X_h, MV_X_Wd, MV_X_DutyX, MV_X_DutyY, motionTime)){
+          motionTimeOrigin = millis(); 
+          motionStep = 0; 
+        }
+        break;
+       
+
+
+        case ACT_ATTACK1:
+
+            break;
+
+        case IDLE:
+        
+            break;
+    }
+
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
 
 
 //左足サーボ
@@ -257,12 +341,12 @@ void setup() {
   FootIK::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
   
   while(1){
-    for(float i=-90;i<90;i++){
+    for(float i=0;i<100;i++){
       FootIK::Pose poses_={
-          260,50,i,
-          0,0,(float)servoICS::fromDeg_toRad(i)
+          250+i,0,0,
+          0,0,0
       };
-      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
+      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8 ,0);
 
       auto log1 = leftFoot_J1.setPosRad(joint.J1);
       auto log2 = leftFoot_J2.setPosRad(joint.J2);
@@ -277,10 +361,10 @@ void setup() {
     }
     delay(2000);
 
-    for(float i=-90;i<90;i++){
+    for(float i=0;i<100;i++){
       FootIK::Pose poses_={
-          260,50,i,
-          0,0,(float)servoICS::fromDeg_toRad(i)
+          250+i,0,0,
+          0,0,0
       };
       FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
 
@@ -330,6 +414,6 @@ int64_t setTime;
 
 
 void loop() {
-  WaitCom();
-  delay(500);
+  stateUpdate();
+  delay(100);
 }

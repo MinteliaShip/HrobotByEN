@@ -86,7 +86,7 @@ namespace FootIK{
             joint.J4 = PI - calcAngle(LengQ, lengs.L5, lengs.L4);
         }else{
             joint.J3 = atan2(P3_5(2), P3_5(0)) + calcAngle(lengs.L5, lengs.L4, LengQ);
-            joint.J4 = PI + calcAngle(LengQ, lengs.L5, lengs.L4);
+            joint.J4 = -PI + calcAngle(LengQ, lengs.L5, lengs.L4);
         }
         return joint;
     }
