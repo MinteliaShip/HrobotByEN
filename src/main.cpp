@@ -271,7 +271,7 @@ void setup() {
       auto log5 = leftFoot_J5.setPosRad(joint.J5);
 
       Serial.printf("[i:%d] J1:%0.2f,J2:%0.2f,J3:%0.2f,J4:%0.2f,J5:%0.2f\n",(int)i,servoICS::fromRad_toDeg(joint.J1),servoICS::fromRad_toDeg(joint.J2),servoICS::fromRad_toDeg(joint.J3),servoICS::fromRad_toDeg(joint.J4),servoICS::fromRad_toDeg(joint.J5));
-      Serial.printf("\nlog1:%s,log2:%s,\nlog3:%s,log4:%s,\nlog5:%s\n",log1.getStatus().error_msg,log2.getStatus().error_msg,log3.getStatus().error_msg,log4.getStatus().error_msg,log5.getStatus().error_msg);
+      Serial.printf("\nlog1:%s,log2:%s,\nlog3:%s,log4:%s,\nlog5:%s\n",log1.returnStatus().error_msg,log2.returnStatus().error_msg,log3.returnStatus().error_msg,log4.returnStatus().error_msg,log5.returnStatus().error_msg);
 
       delay(10);
     }
