@@ -22,7 +22,6 @@ struct {
 
 
 /*宣言・初期化・定数*/
-servoICS::Servo servo1;
 PS4Controller_support Dualshock4;
 ControllerApp::CommandConverter OpeCom(&Dualshock4.data_support);
 const char ControllerMac[18] = "06:02:01:02:05:10";
@@ -233,21 +232,85 @@ void WaitCom(){
 
 }
 
-servoICS::Servo servoDemo;
+
+//左足サーボ
+servoICS::Servo leftFoot_J1(&Serial,0,1);
+servoICS::Servo leftFoot_J2(&Serial,0,2);
+servoICS::Servo leftFoot_J3(&Serial,0,3);
+servoICS::Servo leftFoot_J4(&Serial,0,4);
+servoICS::Servo leftFoot_J5(&Serial,0,5);
+//右足サーボ
+servoICS::Servo rightFoot_J1(&Serial,0,11);
+servoICS::Servo rightFoot_J2(&Serial,0,12);
+servoICS::Servo rightFoot_J3(&Serial,0,13);
+servoICS::Servo rightFoot_J4(&Serial,0,14);
+servoICS::Servo rightFoot_J5(&Serial,0,15);
+
+
 
 void setup() {
 
 
   Serial.begin(bpsPC,SERIAL_8E1);
-  servoDemo.attach(&Serial,0,3);
+  
+  //FootIK::leng8 lengs8={60,100,40,100,100,40,100,60};
+  FootIK::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
   
   while(1){
-    for(float i = -100;i < 100;i+=0.1){
-      servoDemo.setPosDeg(i);
+    for(float i=-90;i<90;i++){
+      FootIK::Pose poses_={
+          260,50,i,
+          0,0,(float)servoICS::fromDeg_toRad(i)
+      };
+      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
+
+      auto log1 = leftFoot_J1.setPosRad(joint.J1);
+      auto log2 = leftFoot_J2.setPosRad(joint.J2);
+      auto log3 = leftFoot_J3.setPosRad(joint.J3);
+      auto log4 =leftFoot_J4.setPosRad(joint.J4);
+      auto log5 = leftFoot_J5.setPosRad(joint.J5);
+
+      Serial.printf("[i:%d] J1:%0.2f,J2:%0.2f,J3:%0.2f,J4:%0.2f,J5:%0.2f\n",(int)i,servoICS::fromRad_toDeg(joint.J1),servoICS::fromRad_toDeg(joint.J2),servoICS::fromRad_toDeg(joint.J3),servoICS::fromRad_toDeg(joint.J4),servoICS::fromRad_toDeg(joint.J5));
+      Serial.printf("\nlog1:%s,log2:%s,\nlog3:%s,log4:%s,\nlog5:%s\n",log1.getStatus().error_msg,log2.getStatus().error_msg,log3.getStatus().error_msg,log4.getStatus().error_msg,log5.getStatus().error_msg);
+
       delay(10);
     }
-    delay(1000);
+    delay(2000);
+
+    for(float i=-90;i<90;i++){
+      FootIK::Pose poses_={
+          260,50,i,
+          0,0,(float)servoICS::fromDeg_toRad(i)
+      };
+      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
+
+      auto log1 = leftFoot_J1.setPosRad(joint.J1);
+      auto log2 = leftFoot_J2.setPosRad(joint.J2);
+      auto log3 = leftFoot_J3.setPosRad(joint.J3);
+      auto log4 =leftFoot_J4.setPosRad(joint.J4);
+      auto log5 = leftFoot_J5.setPosRad(joint.J5);
+      delay(20);
+    }
+    delay(2000);
+
+    for(float i=0;i<=100;i++){
+      FootIK::Pose poses_={
+          440,0,0,
+          0,0,0
+      };
+      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
+
+      auto log1 = leftFoot_J1.setPosRad(joint.J1);
+      auto log2 = leftFoot_J2.setPosRad(joint.J2);
+      auto log3 = leftFoot_J3.setPosRad(joint.J3);
+      auto log4 =leftFoot_J4.setPosRad(joint.J4);
+      auto log5 = leftFoot_J5.setPosRad(joint.J5);
+      delay(20);
+    }
+    delay(2000);
+
   }
+
 
 
 
@@ -256,17 +319,6 @@ void setup() {
   Dualshock4.begin(ControllerMac);
   Dualshock4.update();
 
-  servo1.attach((Stream*)ServoSerial,enPin,0);
-  servo1.setPos(0);
-
-
-  FootIK::Pose poses_={
-      200,100,0,
-      0,0,0
-  };
-  FootIK::leng8 lengs8={60,100,40,100,100,40,100,60};
-
-  FootIK::IK(poses_, lengs8,0);
 
 
 
