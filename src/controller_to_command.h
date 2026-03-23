@@ -37,7 +37,7 @@ namespace ControllerApp {
         ps4_t *inData_;
         Commands cmd_;
         Commands lastCmd_;
-        int deadzone = 10;
+        int deadzone = 20;
 
         
 

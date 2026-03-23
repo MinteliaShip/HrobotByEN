@@ -37,49 +37,50 @@ footServoID footRight = {0,1,2,3,4};
 //足寸法
 FootIK::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
 //歩行関数定数
-float MV_X_T = 1;
-float MV_X_fps = 20;
-float MV_X_h = 50;
-float MV_X_Wd = 40;
-float MV_X_DutyX = 0.4;
-float MV_X_DutyY = 0.45;
+float MV_X_T = 0.8;
+float MV_X_fps = 40;
+float MV_X_h = 20;
+float MV_X_Wd = 150;
+float MV_X_DutyX = 0.2;
+float MV_X_DutyY = 0.18;
+
+//アイドル時の設定
+float IDLE_fps = 5;
 
 
 //左足サーボ
-servoICS::Servo leftFoot_J1(&Serial,0,1);
-servoICS::Servo leftFoot_J2(&Serial,0,2);
-servoICS::Servo leftFoot_J3(&Serial,0,3);
-servoICS::Servo leftFoot_J4(&Serial,0,4);
-servoICS::Servo leftFoot_J5(&Serial,0,5);
+servoICS::Servo leftFoot_J1(&Serial,0,9);//腰部分
+servoICS::Servo leftFoot_J2(&Serial,0,12);
+servoICS::Servo leftFoot_J3(&Serial,0,13);
+servoICS::Servo leftFoot_J4(&Serial,0,14);
+servoICS::Servo leftFoot_J5(&Serial,0,15);
 //右足サーボ
-servoICS::Servo rightFoot_J1(&Serial,0,11);
-servoICS::Servo rightFoot_J2(&Serial,0,12);
-servoICS::Servo rightFoot_J3(&Serial,0,13);
-servoICS::Servo rightFoot_J4(&Serial,0,14);
-servoICS::Servo rightFoot_J5(&Serial,0,15);
-
-
+servoICS::Servo rightFoot_J1(&Serial,0,10);//腰部分
+servoICS::Servo rightFoot_J2(&Serial,0,16);
+servoICS::Servo rightFoot_J3(&Serial,0,17);
+servoICS::Servo rightFoot_J4(&Serial,0,18);
+servoICS::Servo rightFoot_J5(&Serial,0,19);
 
 
 float tread_y(float h,float T,float Duty,float ts_){
-    float A  = 2*h / (1-Duty);
-    float AngV = PI*4/((1-Duty)*T);
-    float t_1 = Duty*T/2;
-    float t_2 = T/2;
-    float t_3 = T-Duty*T/2;
+  float A  = 2*h / (1-Duty);
+  float AngV = PI*4/((1-Duty)*T);
+  float t_1 = Duty*T/2;
+  float t_2 = T/2;
+  float t_3 = T-Duty*T/2;
 
-    float y_ = 0.0;
+  float y_ = 0.0;
 
-    if (ts_ < t_1) {
-        y_ = 0;
-    }else if (ts_ < t_2) {
-        y_ = -A / (2 * AngV) * sin(AngV * (ts_ - t_1)) + A / 2 * (ts_ - t_1);
-    }else if(ts_ < t_3) {
-        y_ = A / (2 * AngV) * sin(AngV * (ts_ - t_2)) - A / 2 * (ts_ - t_2) + (1.0 - Duty) * T * A / 4.0;
-    }else {
-        y_ = 0;
-    }
-    return y_;
+  if (ts_ < t_1) {
+      y_ = 0;
+  }else if (ts_ < t_2) {
+      y_ = -A / (2 * AngV) * sin(AngV * (ts_ - t_1)) + A / 2 * (ts_ - t_1);
+  }else if(ts_ < t_3) {
+      y_ = A / (2 * AngV) * sin(AngV * (ts_ - t_2)) - A / 2 * (ts_ - t_2) + (1.0 - Duty) * T * A / 4.0;
+  }else {
+      y_ = 0;
+  }
+  return y_;
 }
 
 
@@ -104,26 +105,58 @@ float tread_x(float Wd,float T,float Duty,float ts_){
     }
     return x_;
 }
- 
+//0 49 50 99
+//50 99 0 49
+
+long phaseShift(long inStep,long phaseShift){
+  long result = 0;
+  if(phaseShift>inStep){
+    result = inStep + phaseShift;
+  }else{
+    result = inStep - phaseShift;
+  }
+  return result;
+}
 
 
-bool MV_X_F(float T, float fps, float h, float Wd, float DutyX, float DutyY, long motionTime){
 
-  float y = tread_y(h,T,DutyY,motionTime*0.001);
-  float x = tread_x(Wd,T,DutyX,motionTime*0.001);
+bool MV_X_F(long motionTime){
 
+  float T = MV_X_T;
+  float h = MV_X_h;
+  float Wd = MV_X_Wd;
+  float DutyX = MV_X_DutyX;
+  float DutyY = MV_X_DutyY;
 
-  FootIK::Pose poses_={
-    350+y,0,x,
-    servoICS::fromDeg_toRad(0),0,0
+  ControllerApp::Commands cmd = OpeCom.getCommands();
+
+  //左足計算式
+  float ly = tread_y(h,T,DutyY,motionTime*0.001);
+  float lx = tread_x(Wd*(-cmd.moveSpeed.y*0.01),T,DutyX,motionTime*0.001);
+  FootIK::Pose lposes_={
+    420-ly,0,lx,
+    0,0,0
   };
-  FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8 ,0);
 
-  auto log1 = leftFoot_J1.setPosRad(joint.J1);
-  auto log2 = leftFoot_J2.setPosRad(joint.J2);
-  auto log3 = leftFoot_J3.setPosRad(joint.J3);
-  auto log4 =leftFoot_J4.setPosRad(joint.J4);
-  auto log5 = leftFoot_J5.setPosRad(joint.J5);
+  FootIK::footJoint5 leftJoint = FootIK::IK(lposes_, lengs8 ,0);
+  leftFoot_J1.setPosRad(leftJoint.J1);
+  leftFoot_J2.setPosRad(leftJoint.J2);
+  leftFoot_J3.setPosRad(leftJoint.J3);
+  leftFoot_J4.setPosRad(leftJoint.J4);
+  leftFoot_J5.setPosRad(leftJoint.J5);
+
+  float ry = tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
+  float rx = tread_x(Wd*(-cmd.moveSpeed.y*0.01),T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
+  FootIK::Pose rposes_={
+    420-ry,0,rx,
+    0,0,0
+  };
+  FootIK::footJoint5 rightJoint = FootIK::IK(rposes_, lengs8 ,0);
+  rightFoot_J1.setPosRad(rightJoint.J1);
+  rightFoot_J2.setPosRad(rightJoint.J2);
+  rightFoot_J3.setPosRad(rightJoint.J3);
+  rightFoot_J4.setPosRad(rightJoint.J4);
+  rightFoot_J5.setPosRad(rightJoint.J5);
 
   if((long)(T*1000) > motionTime){
     return false;
@@ -132,6 +165,30 @@ bool MV_X_F(float T, float fps, float h, float Wd, float DutyX, float DutyY, lon
   }
 }
 
+void IDLE_F(){
+  //直立
+  FootIK::Pose lposes_={
+    420,0,0,
+    0,0,0
+  };
+  FootIK::footJoint5 leftJoint = FootIK::IK(lposes_, lengs8 ,0);
+  leftFoot_J1.setPosRad(leftJoint.J1);
+  leftFoot_J2.setPosRad(leftJoint.J2);
+  leftFoot_J3.setPosRad(leftJoint.J3);
+  leftFoot_J4.setPosRad(leftJoint.J4);
+  leftFoot_J5.setPosRad(leftJoint.J5);
+
+  FootIK::Pose rposes_={
+    420,0,0,
+    0,0,0
+  };
+  FootIK::footJoint5 rightJoint = FootIK::IK(rposes_, lengs8 ,0);
+  rightFoot_J1.setPosRad(rightJoint.J1);
+  rightFoot_J2.setPosRad(rightJoint.J2);
+  rightFoot_J3.setPosRad(rightJoint.J3);
+  rightFoot_J4.setPosRad(rightJoint.J4);
+  rightFoot_J5.setPosRad(rightJoint.J5);
+}
 
 enum RobotState {
   IDLE,
@@ -155,10 +212,10 @@ bool stateUpdate(){
     OpeCom.update();
     ControllerApp::Commands cmd = OpeCom.getCommands();
 
-    if(cmd.moveSpeed.x != 0){
+    if(cmd.moveSpeed.y != 0){
       //前進後退
       robotState = MV_X;
-    }else if(cmd.moveSpeed.y != 0){
+    }else if(cmd.moveSpeed.x != 0){
       //左右移動
       robotState = MV_Y;
     }else if(cmd.moveAngle != 0){
@@ -206,7 +263,7 @@ int motionStep = 0;
 long motionTimeOrigin = 0;
 void motorTask(void *pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(10); 
+  TickType_t xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps)); 
 
   while(1){
     if (stateUpdate()) {
@@ -218,14 +275,15 @@ void motorTask(void *pvParameters) {
 
     switch (robotState) {
       case MV_X:
-        if(MV_X_F(MV_X_T, MV_X_fps, MV_X_h, MV_X_Wd, MV_X_DutyX, MV_X_DutyY, motionTime)){
+        if(MV_X_F(motionTime)){
           motionTimeOrigin = millis(); 
           motionStep = 0; 
         }
         break;
 
       case IDLE:
-        
+        IDLE_F();
+        TickType_t xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps)); 
         break;
     }
 
@@ -239,11 +297,24 @@ void setup() {
   Dualshock4.begin(ControllerMac);
   Dualshock4.update();
 
-  motorTask(NULL);
+
+  xTaskCreateUniversal(
+    motorTask,      // 関数名
+    "motorTask",    // タスク名
+    4096,           // スタックサイズ
+    NULL,           // パラメータ
+    1,              // 優先度
+    NULL,           // タスクハンドル
+    1               // 実行するコア (0 or 1)
+  );
+
+
 }
 
 int64_t setTime;
 
 
 
-void loop() {}
+void loop() {
+  delay(1000);
+}
