@@ -34,13 +34,29 @@ const char rxPin = 19;
 const long bpsServo = 115200;
 //サーボの設定。
 footServoID footRight = {0,1,2,3,4};
+//足寸法
+FootIK::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
 //歩行関数定数
 float MV_X_T = 1;
 float MV_X_fps = 20;
-float MV_X_h = 10;
-float MV_X_Wd = 10;
+float MV_X_h = 50;
+float MV_X_Wd = 40;
 float MV_X_DutyX = 0.4;
 float MV_X_DutyY = 0.45;
+
+
+//左足サーボ
+servoICS::Servo leftFoot_J1(&Serial,0,1);
+servoICS::Servo leftFoot_J2(&Serial,0,2);
+servoICS::Servo leftFoot_J3(&Serial,0,3);
+servoICS::Servo leftFoot_J4(&Serial,0,4);
+servoICS::Servo leftFoot_J5(&Serial,0,5);
+//右足サーボ
+servoICS::Servo rightFoot_J1(&Serial,0,11);
+servoICS::Servo rightFoot_J2(&Serial,0,12);
+servoICS::Servo rightFoot_J3(&Serial,0,13);
+servoICS::Servo rightFoot_J4(&Serial,0,14);
+servoICS::Servo rightFoot_J5(&Serial,0,15);
 
 
 
@@ -90,125 +106,31 @@ float tread_x(float Wd,float T,float Duty,float ts_){
 }
  
 
-int executionCycil(float cycilTime, float offsetTime, float fps, void (*p_func)(float)) {
-    int64_t start_time = esp_timer_get_time();
-    int64_t total_duration_us = (int64_t)(cycilTime * 1000000.0f);
-    int64_t intervalTime = (int64_t)(1000000.0f / fps);
-    int64_t nextTime = start_time + intervalTime;
-
-    while (true) {
-        int64_t now = esp_timer_get_time();
-        int64_t elapsed_us = now - start_time;
-
-        // 1. ループの先頭で終了判定を行う（確実）
-        if (elapsed_us >= total_duration_us) {
-            Serial.println("Cycle Finished.");
-            break;
-        }
-
-        // 2. 関数の実行
-        p_func((float)elapsed_us * 0.000001f);
-
-        // 4. 次のフレームまで待機
-        while ((esp_timer_get_time() - start_time) < (nextTime - start_time)) {
-            delay(1);
-        }
-        nextTime += intervalTime;
-    }
-    return 0;
-}
 
 bool MV_X_F(float T, float fps, float h, float Wd, float DutyX, float DutyY, long motionTime){
 
   float y = tread_y(h,T,DutyY,motionTime*0.001);
   float x = tread_x(Wd,T,DutyX,motionTime*0.001);
 
-  //グラフ作成[*,+]
-  for(int i=-50;i<int(y);i++){
-      Serial.printf("*");
+
+  FootIK::Pose poses_={
+    350+y,0,x,
+    servoICS::fromDeg_toRad(0),0,0
+  };
+  FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8 ,0);
+
+  auto log1 = leftFoot_J1.setPosRad(joint.J1);
+  auto log2 = leftFoot_J2.setPosRad(joint.J2);
+  auto log3 = leftFoot_J3.setPosRad(joint.J3);
+  auto log4 =leftFoot_J4.setPosRad(joint.J4);
+  auto log5 = leftFoot_J5.setPosRad(joint.J5);
+
+  if((long)(T*1000) > motionTime){
+    return false;
+  }else{
+    return true;
   }
-  Serial.printf("\n");
-  for(int i=-50;i<int(x);i++){
-      Serial.printf("+");
-  }
-  Serial.printf("\n");
 }
-
-/*
-namespace walk{
-  float x,y;
-
-  bool isForward;
-  bool isBackward;
-  bool isMoveRight;
-  bool isMoveLeft;
-
-
-  
-  void update(){
-    x = (float)map(DS4->LStickX(),-128,127,-1000,1000) * 0.1;
-    y = (float)map(DS4->LStickY(),-128,127,-1000,1000) * 0.1;
-
-    if(x > 50){
-      isForward = true;
-      isBackward = false;
-    }else if(x < -50){
-      isForward = false;
-      isBackward = true;
-    }else{
-      isForward = false;
-      isBackward = false;
-    }
-
-    if(y > 50){
-      isMoveRight = true;
-      isMoveLeft = false;
-    }else if(y < -50){
-      isMoveLeft = true;
-      isMoveRight = false;
-    }else{
-      isMoveRight = false;
-      isMoveLeft = false;
-    }
-  }
-
-  float T;
-  float fps;
-  float h;
-  float Wd;
-  float DutyX;
-  float DutyY;
-
-
-
-  void treadxy(float t){
-    float y = tread_y(h,T,DutyY,t);
-    float x = tread_x(Wd,T,DutyX,t);
-
-    //グラフ作成[*,+]
-    for(int i=-50;i<int(y);i++){
-        Serial.printf("*");
-    }
-    Serial.printf("\n");
-    for(int i=-50;i<int(x);i++){
-        Serial.printf("+");
-    }
-    Serial.printf("\n");
-  }
-
-  void walk_play(float T_,float fps_, float h_, float Wd_,float DutyX_,float DutyY_){
-    T = T_;
-    fps = fps_;
-    h = h_;
-    Wd = Wd_;
-    DutyX = DutyX_;
-    DutyY = DutyY_;
-
-    executionCycil(T,0,fps,treadxy);
-  } 
-}
-*/
-
 
 
 enum RobotState {
@@ -227,7 +149,7 @@ RobotState robotState = IDLE;
 
 int lastRecvTime=0;
 bool stateUpdate(){
-  RobotState robotStateLast = robotState;
+  static RobotState robotStateLast;
   if (Dualshock4.isConnected()) {
     Dualshock4.update();
     OpeCom.update();
@@ -269,8 +191,10 @@ bool stateUpdate(){
   }
 
   if(robotStateLast != robotStateLast){//変化があれば1 なければ0
+    robotStateLast = robotState;
     return 1;
   }else{
+    robotStateLast = robotState;
     return 0;
   }
 
@@ -282,7 +206,7 @@ int motionStep = 0;
 long motionTimeOrigin = 0;
 void motorTask(void *pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(20); 
+  const TickType_t xFrequency = pdMS_TO_TICKS(10); 
 
   while(1){
     if (stateUpdate()) {
@@ -299,121 +223,27 @@ void motorTask(void *pvParameters) {
           motionStep = 0; 
         }
         break;
-       
 
-
-        case ACT_ATTACK1:
-
-            break;
-
-        case IDLE:
+      case IDLE:
         
-            break;
+        break;
     }
 
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 
-
-
-//左足サーボ
-servoICS::Servo leftFoot_J1(&Serial,0,1);
-servoICS::Servo leftFoot_J2(&Serial,0,2);
-servoICS::Servo leftFoot_J3(&Serial,0,3);
-servoICS::Servo leftFoot_J4(&Serial,0,4);
-servoICS::Servo leftFoot_J5(&Serial,0,5);
-//右足サーボ
-servoICS::Servo rightFoot_J1(&Serial,0,11);
-servoICS::Servo rightFoot_J2(&Serial,0,12);
-servoICS::Servo rightFoot_J3(&Serial,0,13);
-servoICS::Servo rightFoot_J4(&Serial,0,14);
-servoICS::Servo rightFoot_J5(&Serial,0,15);
-
-
-
 void setup() {
-
-
   Serial.begin(bpsPC,SERIAL_8E1);
-  
-  //FootIK::leng8 lengs8={60,100,40,100,100,40,100,60};
-  FootIK::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
-  
-  while(1){
-    for(float i=0;i<100;i++){
-      FootIK::Pose poses_={
-          250+i,0,0,
-          0,0,0
-      };
-      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8 ,0);
-
-      auto log1 = leftFoot_J1.setPosRad(joint.J1);
-      auto log2 = leftFoot_J2.setPosRad(joint.J2);
-      auto log3 = leftFoot_J3.setPosRad(joint.J3);
-      auto log4 =leftFoot_J4.setPosRad(joint.J4);
-      auto log5 = leftFoot_J5.setPosRad(joint.J5);
-
-      Serial.printf("[i:%d] J1:%0.2f,J2:%0.2f,J3:%0.2f,J4:%0.2f,J5:%0.2f\n",(int)i,servoICS::fromRad_toDeg(joint.J1),servoICS::fromRad_toDeg(joint.J2),servoICS::fromRad_toDeg(joint.J3),servoICS::fromRad_toDeg(joint.J4),servoICS::fromRad_toDeg(joint.J5));
-      Serial.printf("\nlog1:%s,log2:%s,\nlog3:%s,log4:%s,\nlog5:%s\n",log1.returnStatus().error_msg,log2.returnStatus().error_msg,log3.returnStatus().error_msg,log4.returnStatus().error_msg,log5.returnStatus().error_msg);
-
-      delay(10);
-    }
-    delay(2000);
-
-    for(float i=0;i<100;i++){
-      FootIK::Pose poses_={
-          250+i,0,0,
-          0,0,0
-      };
-      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
-
-      auto log1 = leftFoot_J1.setPosRad(joint.J1);
-      auto log2 = leftFoot_J2.setPosRad(joint.J2);
-      auto log3 = leftFoot_J3.setPosRad(joint.J3);
-      auto log4 =leftFoot_J4.setPosRad(joint.J4);
-      auto log5 = leftFoot_J5.setPosRad(joint.J5);
-      delay(20);
-    }
-    delay(2000);
-
-    for(float i=0;i<=100;i++){
-      FootIK::Pose poses_={
-          440,0,0,
-          0,0,0
-      };
-      FootIK::footJoint5 joint = FootIK::IK(poses_, lengs8,0);
-
-      auto log1 = leftFoot_J1.setPosRad(joint.J1);
-      auto log2 = leftFoot_J2.setPosRad(joint.J2);
-      auto log3 = leftFoot_J3.setPosRad(joint.J3);
-      auto log4 =leftFoot_J4.setPosRad(joint.J4);
-      auto log5 = leftFoot_J5.setPosRad(joint.J5);
-      delay(20);
-    }
-    delay(2000);
-
-  }
-
-
-
-
   ServoSerial->begin(bpsServo,SERIAL_8E1,rxPin,txPin);  //SERIAL_8E1がICS規格で使用されている。
-
   Dualshock4.begin(ControllerMac);
   Dualshock4.update();
 
-
-
-
-
+  motorTask(NULL);
 }
 
 int64_t setTime;
 
 
 
-void loop() {
-  stateUpdate();
-  delay(100);
-}
+void loop() {}
