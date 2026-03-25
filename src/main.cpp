@@ -1,29 +1,21 @@
 #include <Arduino.h>
 #include <servoICS.h>
 
-#include "FootIK.h"
-#include "PS4Controller_support.h"
+#include <WiFi.h>
+
+#include <PS4Controller.h>
+#include <esp_gap_bt_api.h>
+
 #include "controller_to_command.h"
-#include "esp_timer.h"
 
-
+#include "FootController.h"
 
 #include <math.h>
 
 
-struct {
-  char J1;
-  char J2;
-  char J3;
-  char J4;
-  char J5;
-}typedef footServoID;
-
-
-
 /*宣言・初期化・定数*/
-PS4Controller_support Dualshock4;
-ControllerApp::CommandConverter OpeCom(&Dualshock4.data_support);
+PS4Controller Dualshock4;
+ControllerApp::CommandConverter OpeCom(&Dualshock4.data);
 const char ControllerMac[18] = "06:02:01:02:05:10";
 const long bpsPC = 115200;
 //サーボとの通信設定
@@ -32,10 +24,30 @@ const char enPin = 23;
 const char txPin = 33;
 const char rxPin = 19;
 const long bpsServo = 115200;
-//サーボの設定。
-footServoID footRight = {0,1,2,3,4};
+
 //足寸法
-FootIK::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
+FootController::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
+FootController::IcsServoConfig leftfootConfig{
+  9,
+  12,
+  13,
+  14,
+  15,
+  enPin,
+  &Serial
+};
+FootController::IcsServoConfig rightfootConfig{
+  10,
+  16,
+  17,
+  18,
+  19,
+  enPin,
+  &Serial
+};
+//足コントロール
+FootController leftFoot(leftfootConfig,lengs8);
+FootController rightFoot(rightfootConfig,lengs8);
 //歩行関数定数
 float MV_X_T = 0.8;
 float MV_X_fps = 40;
@@ -46,21 +58,6 @@ float MV_X_DutyY = 0.18;
 
 //アイドル時の設定
 float IDLE_fps = 5;
-
-
-//左足サーボ
-servoICS::Servo leftFoot_J1(&Serial,0,9);//腰部分
-servoICS::Servo leftFoot_J2(&Serial,0,12);
-servoICS::Servo leftFoot_J3(&Serial,0,13);
-servoICS::Servo leftFoot_J4(&Serial,0,14);
-servoICS::Servo leftFoot_J5(&Serial,0,15);
-//右足サーボ
-servoICS::Servo rightFoot_J1(&Serial,0,10);//腰部分
-servoICS::Servo rightFoot_J2(&Serial,0,16);
-servoICS::Servo rightFoot_J3(&Serial,0,17);
-servoICS::Servo rightFoot_J4(&Serial,0,18);
-servoICS::Servo rightFoot_J5(&Serial,0,19);
-
 
 float tread_y(float h,float T,float Duty,float ts_){
   float A  = 2*h / (1-Duty);
@@ -118,6 +115,22 @@ long phaseShift(long inStep,long phaseShift){
   return result;
 }
 
+void bondReset(){
+  // 1. 保存されているデバイスの数を確認
+  int dev_num = esp_bt_gap_get_bond_device_num();
+
+  if (dev_num > 0) {
+    esp_bd_addr_t dev_list[dev_num];
+    // 2. デバイスリストを取得
+    esp_bt_gap_get_bond_device_list(&dev_num, dev_list);
+    
+    // 3. 全てのデバイス情報を削除（リセット）
+    for (int i = 0; i < dev_num; i++) {
+      esp_bt_gap_remove_bond_device(dev_list[i]);
+    }
+  }
+}
+
 
 
 bool MV_X_F(long motionTime){
@@ -133,30 +146,20 @@ bool MV_X_F(long motionTime){
   //左足計算式
   float ly = tread_y(h,T,DutyY,motionTime*0.001);
   float lx = tread_x(Wd*(-cmd.moveSpeed.y*0.01),T,DutyX,motionTime*0.001);
-  FootIK::Pose lposes_={
+
+  FootController::Pose leftPose={
     420-ly,0,lx,
     0,0,0
   };
-
-  FootIK::footJoint5 leftJoint = FootIK::IK(lposes_, lengs8 ,0);
-  leftFoot_J1.setPosRad(leftJoint.J1);
-  leftFoot_J2.setPosRad(leftJoint.J2);
-  leftFoot_J3.setPosRad(leftJoint.J3);
-  leftFoot_J4.setPosRad(leftJoint.J4);
-  leftFoot_J5.setPosRad(leftJoint.J5);
+  leftFoot.setTargetPose(leftPose);
 
   float ry = tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
   float rx = tread_x(Wd*(-cmd.moveSpeed.y*0.01),T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
-  FootIK::Pose rposes_={
+  FootController::Pose rightPos={
     420-ry,0,rx,
     0,0,0
   };
-  FootIK::footJoint5 rightJoint = FootIK::IK(rposes_, lengs8 ,0);
-  rightFoot_J1.setPosRad(rightJoint.J1);
-  rightFoot_J2.setPosRad(rightJoint.J2);
-  rightFoot_J3.setPosRad(rightJoint.J3);
-  rightFoot_J4.setPosRad(rightJoint.J4);
-  rightFoot_J5.setPosRad(rightJoint.J5);
+  rightFoot.setTargetPose(rightPos);
 
   if((long)(T*1000) > motionTime){
     return false;
@@ -167,27 +170,12 @@ bool MV_X_F(long motionTime){
 
 void IDLE_F(){
   //直立
-  FootIK::Pose lposes_={
+  FootController::Pose Pose={
     420,0,0,
     0,0,0
   };
-  FootIK::footJoint5 leftJoint = FootIK::IK(lposes_, lengs8 ,0);
-  leftFoot_J1.setPosRad(leftJoint.J1);
-  leftFoot_J2.setPosRad(leftJoint.J2);
-  leftFoot_J3.setPosRad(leftJoint.J3);
-  leftFoot_J4.setPosRad(leftJoint.J4);
-  leftFoot_J5.setPosRad(leftJoint.J5);
-
-  FootIK::Pose rposes_={
-    420,0,0,
-    0,0,0
-  };
-  FootIK::footJoint5 rightJoint = FootIK::IK(rposes_, lengs8 ,0);
-  rightFoot_J1.setPosRad(rightJoint.J1);
-  rightFoot_J2.setPosRad(rightJoint.J2);
-  rightFoot_J3.setPosRad(rightJoint.J3);
-  rightFoot_J4.setPosRad(rightJoint.J4);
-  rightFoot_J5.setPosRad(rightJoint.J5);
+  leftFoot.setTargetPose(Pose);
+  rightFoot.setTargetPose(Pose);
 }
 
 enum RobotState {
@@ -208,7 +196,6 @@ int lastRecvTime=0;
 bool stateUpdate(){
   static RobotState robotStateLast;
   if (Dualshock4.isConnected()) {
-    Dualshock4.update();
     OpeCom.update();
     ControllerApp::Commands cmd = OpeCom.getCommands();
 
@@ -247,7 +234,7 @@ bool stateUpdate(){
     }
   }
 
-  if(robotStateLast != robotStateLast){//変化があれば1 なければ0
+  if(robotStateLast != robotState){//変化があれば1 なければ0
     robotStateLast = robotState;
     return 1;
   }else{
@@ -292,10 +279,11 @@ void motorTask(void *pvParameters) {
 }
 
 void setup() {
+  WiFi.mode(WIFI_OFF);
   Serial.begin(bpsPC,SERIAL_8E1);
   ServoSerial->begin(bpsServo,SERIAL_8E1,rxPin,txPin);  //SERIAL_8E1がICS規格で使用されている。
   Dualshock4.begin(ControllerMac);
-  Dualshock4.update();
+  bondReset();
 
 
   xTaskCreateUniversal(
@@ -310,9 +298,6 @@ void setup() {
 
 
 }
-
-int64_t setTime;
-
 
 
 void loop() {

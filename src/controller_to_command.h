@@ -2,7 +2,7 @@
 #define CONTROLLER_TO_COMMAND_HPP
 
 #include <cstdint>
-#include "PS4Controller_support.h"
+#include <PS4Controller.h>
 
 namespace ControllerApp {
 
