@@ -25,6 +25,14 @@ namespace ControllerApp {
         bool isAttack3=0;
         bool isAttack4=0;
 
+        bool isTaunt=0;
+
+        //特殊機能
+        bool isSp1=0;
+        bool isSp2=0;
+        
+
+
         //起き上がりモーション
         bool isGetup=0;
         //しゃがみモーション
@@ -37,7 +45,7 @@ namespace ControllerApp {
         ps4_t *inData_;
         Commands cmd_;
         Commands lastCmd_;
-        int deadzone = 20;
+        int deadzone = 30;
 
         
 
@@ -48,9 +56,12 @@ namespace ControllerApp {
             return cmd_;
         }
 
+        void setDeadzone(int deadzone_){
+            deadzone = deadzone_;
+        }
+
         // 生データを受け取り、変換したコマンドを返す
         void update() {
-
 
             //0±deadzone以内の値はすべて0として扱う。倒していないときには確実に0になるよう調整。
             int stick_lx = inData_->analog.stick.lx;
@@ -74,7 +85,6 @@ namespace ControllerApp {
             if(stick_lx <= -128 + deadzone)stick_lx = -127 + deadzone;
             if(stick_ly <= -128 + deadzone)stick_ly = -127 + deadzone;
 
-            Serial.print(stick_ly);
             cmd_.moveSpeed.x = static_cast<float>(map(stick_lx,-127 + deadzone,127 - deadzone,-1000,1000) * 0.1f);
             cmd_.moveSpeed.y = static_cast<float>(map(stick_ly,-127 + deadzone,127 - deadzone,-1000,1000) * 0.1f);
             
@@ -83,8 +93,16 @@ namespace ControllerApp {
             cmd_.isAttack3 = inData_->button.r1;
             cmd_.isAttack4 = inData_->button.r2;
 
+            cmd_.isTaunt = inData_->button.touchpad;
+
+
+
+
             cmd_.isGetup = inData_->button.share;
             cmd_.isSquat = inData_->button.options;
+
+            cmd_.isSp1 = inData_->button.triangle;
+            cmd_.isSp2 = inData_->button.circle;
         }
     };
 

@@ -65,15 +65,42 @@ void FootController::setTargetPose(const Pose& targetPose,int mode){
       joint.J4 = -PI + calcAngle(LengQ, footLeng.L5, footLeng.L4);
   }
 
-
-  setJointAnglesRad(
+  /*シミュレーション(Unity)
+    setJointAnglesRad(
     joint.J1,
     joint.J2,
     joint.J3,
     joint.J4 + joint.J3,//平行リンクのため
     joint.J5
   );
+  */
+
+
+  setJointAnglesRad(
+    joint.J1,
+    joint.J2,
+    -joint.J3,
+    joint.J4 + joint.J3,//平行リンクのため
+    joint.J5
+  );
 }
+
+void FootController::setOffset(long J1_,long J2_,long J3_,long J4_,long J5_){
+  servoJ1.setOffset(J1_);
+  servoJ2.setOffset(J2_);
+  servoJ3.setOffset(J3_);
+  servoJ4.setOffset(J4_);
+  servoJ5.setOffset(J5_);
+}
+
+void FootController::DemoPos(){
+  Serial.printf("J1:%d \n",servoJ1.setPos(0).getPos().value);
+  Serial.printf("J2:%d \n",servoJ2.setPos(0).getPos().value);
+  Serial.printf("J3:%d \n",servoJ3.setPos(0).getPos().value);
+  Serial.printf("J4:%d \n",servoJ4.setPos(0).getPos().value);
+  Serial.printf("J5:%d \n",servoJ5.setPos(0).getPos().value);
+}
+
 
 //計算補助
 float FootController::calcAngle(float LengA, float LengB, float LengC)

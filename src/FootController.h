@@ -64,6 +64,9 @@ class FootController{
     void setJointAnglesDeg(float J1_,float J2_,float J3_,float J4_,float J5_);
     void setJointAnglesRad(float J1_,float J2_,float J3_,float J4_,float J5_);
 
+    void setOffset(long J1_,long J2_,long J3_,long J4_,long J5_);
+    void DemoPos();
+
     void setTargetPose(const Pose& targetPos,int mode=0);
 
     private:
