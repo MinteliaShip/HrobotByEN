@@ -1,13 +1,8 @@
 #include <Arduino.h>
 #include <servoICS.h>
-
-
 #include <PS4Controller.h>
 #include <esp_gap_bt_api.h>
 
-#include "controller_to_command.h"
-
-#include "FootController.h"
 
 struct Vector2 {
   float x;
@@ -15,68 +10,20 @@ struct Vector2 {
   Vector2(float _x = 0.0f, float _y = 0.0f) : x(_x), y(_y) {}
 };
 
+
+
+#include "controller_to_command.h"
+
+#include "FootController.h"
+
+#include "Config.h"
+
+
 /*宣言・初期化・定数*/
 PS4Controller Dualshock4;
-ControllerApp::CommandConverter OpeCom(&Dualshock4.data);
-const char ControllerMac[18] = "06:02:01:02:05:10";
-const long bpsPC = 115200;
-//サーボとの通信設定
-HardwareSerial* ServoSerial = &Serial1;
-const char enPin = 23;
-const char txPin = 19;
-const char rxPin = 22;
-const long bpsServo = 115200;
-
-//足寸法
-FootController::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
-FootController::IcsServoConfig leftfootConfig{
-  9,
-  12,
-  13,
-  14,
-  15,
-  enPin,
-  ServoSerial
-};
-
-FootController::IcsServoConfig rightfootConfig{
-  10,
-  16,
-  17,
-  18,
-  19,
-  enPin,
-  ServoSerial
-};
-//足コントロール
-FootController leftFoot(leftfootConfig,lengs8);
-FootController rightFoot(rightfootConfig,lengs8);
-//歩行関数定数
-float MV_X_T = 0.6;
-float MV_X_fps = 40;
-float MV_X_h = 20;
-float MV_X_Wd = 120;
-float MV_X_DutyX = 0.6;
-float MV_X_DutyY = 0.8;
-
-//平行移動
-float MV_FREE_T = 0.6;
-float MV_FREE_fps = 40;
-float MV_FREE_h = 20;
-float MV_FREE_Wd = 120;
-float MV_FREE_DutyX = 0.6;
-float MV_FREE_DutyY = 0.8;
-
-//歩行関数定数
-float MV_Y_T = 0.5;
-float MV_Y_fps = 40;
-float MV_Y_h = 5;
-float MV_Y_Wd = 80;
-float MV_Y_DutyX = 0.8;
-float MV_Y_DutyY = 0.8;
-
-//アイドル時の設定
-float IDLE_fps = 5;
+ControllerApp::CommandConverter OpeCom(&Dualshock4.data,Config::mapping);
+FootController leftFoot(Config::leftfootConfig,Config::lengs8);
+FootController rightFoot(Config::rightfootConfig,Config::lengs8);
 
 /*-------------------------------------*/
 //歩行軌道生成
@@ -161,40 +108,28 @@ void bondReset(){
     }
   }
 }
-//2次元ベクトルの正方化
-Vector2 Normalized(Vector2 input) {
-    // ベクトルの大きさ（長さ）を計算: L = sqrt(x^2 + y^2)
-    float magnitude = sqrt(input.x * input.x + input.y * input.y);
 
-    // 0除算を防ぐため、一定以上の入力がある場合のみ計算
-    if (magnitude > 0.001f) {
-        return Vector2(input.x / magnitude, input.y / magnitude);
-    }
-
-    // 入力がデッドゾーン内などで極めて小さい場合はゼロベクトルを返す
-    return Vector2(0.0f, 0.0f);
-}
 /*-------------------------------------*/
 //動作関数
 //前後方向移動
-bool MV_X_F(long motionTime){
+bool MV_X_F(long motionTime,GaitParameters GaitParameters_){
 
-  float T = MV_X_T;
-  float h = MV_X_h;
-  float Wd = MV_X_Wd;
-  float DutyX = MV_X_DutyX;
-  float DutyY = MV_X_DutyY;
+  float T = GaitParameters_.T;
+  float h = GaitParameters_.h;
+  float Wd = GaitParameters_.Wd;
+  float DutyX = GaitParameters_.DutyX;
+  float DutyY = GaitParameters_.DutyY;
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
-  auto leftPos_ = tread(h,Wd*(-cmd.moveSpeed.y * 0.01),DutyX,DutyY,T,motionTime*0.001);
+  auto leftPos_ = tread(h,Wd*(-cmd.moveUnit.y * cmd.moveMag),DutyX,DutyY,T,motionTime*0.001);
   FootController::Pose leftPose={
     420-leftPos_.y,20,leftPos_.x,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  auto rightPos_ = tread(h,Wd*(-cmd.moveSpeed.y * 0.01),DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
+  auto rightPos_ = tread(h,Wd*(-cmd.moveUnit.y * cmd.moveMag),DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
     420-rightPos_.y,-20,rightPos_.x,
     0, 0, 0
@@ -208,23 +143,23 @@ bool MV_X_F(long motionTime){
   }
 }
 //左右方向移動
-bool MV_Y_F(long motionTime){
-  float T = MV_Y_T;
-  float h = MV_Y_h;
-  float Wd = MV_Y_Wd;
-  float DutyX = MV_Y_DutyX;
-  float DutyY = MV_Y_DutyY;
+bool MV_Y_F(long motionTime,GaitParameters GaitParameters_){
+  float T = GaitParameters_.T;
+  float h = GaitParameters_.h;
+  float Wd = GaitParameters_.Wd;
+  float DutyX = GaitParameters_.DutyX;
+  float DutyY = GaitParameters_.DutyY;
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
-  auto leftPos_ = tread(h,Wd*(-cmd.moveSpeed.x * 0.01),DutyX,DutyY,T,motionTime*0.001);
+  auto leftPos_ = tread(h,Wd*(-cmd.moveUnit.x * cmd.moveMag),DutyX,DutyY,T,motionTime*0.001);
   FootController::Pose leftPose={
     420-leftPos_.y,leftPos_.x+20,0,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  auto rightPos_ = tread(h,Wd*(-cmd.moveSpeed.x * 0.01),DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
+  auto rightPos_ = tread(h,Wd*(-cmd.moveUnit.x * cmd.moveMag),DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
     420-rightPos_.y,rightPos_.x-20,0,
     0, 0, 0
@@ -238,20 +173,18 @@ bool MV_Y_F(long motionTime){
   }
 }
 //平行移動
-bool MV_FREE_F(long motionTime){
-  float T = MV_X_T;
-  float h = MV_X_h;
-  float Wd = MV_X_Wd;
-  float DutyX = MV_X_DutyX;
-  float DutyY = MV_X_DutyY;
+bool MV_FREE_F(long motionTime,GaitParameters GaitParameters_){
+  float T = GaitParameters_.T;
+  float h = GaitParameters_.h;
+  float Wd = GaitParameters_.Wd;
+  float DutyX = GaitParameters_.DutyX;
+  float DutyY = GaitParameters_.DutyY;
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
-  auto moveAngle = Normalized((Vector2){cmd.moveSpeed.y,cmd.moveSpeed.x});
-
   float footLeftUp = tread_y(h,T,DutyY,motionTime*0.001);
-  float Left_x = tread_x(Wd*-moveAngle.x,T,DutyX,motionTime*0.001);
-  float Left_z = tread_x(Wd*-moveAngle.y,T,DutyX,motionTime*0.001);
+  float Left_x = tread_x(Wd*-cmd.moveUnit.x*cmd.moveMag,T,DutyX,motionTime*0.001);
+  float Left_z = tread_x(Wd*-cmd.moveUnit.y*cmd.moveMag,T,DutyX,motionTime*0.001);
   FootController::Pose leftPose={
     420-footLeftUp,Left_z+20,Left_x,
     0, 0, 0
@@ -259,8 +192,8 @@ bool MV_FREE_F(long motionTime){
   leftFoot.setTargetPose(leftPose);
 
   float footRightUp = tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_x = tread_x(Wd*-moveAngle.x,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_z = tread_x(Wd*-moveAngle.y,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
+  float Right_x = tread_x(Wd*-cmd.moveUnit.x*cmd.moveMag,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
+  float Right_z = tread_x(Wd*-cmd.moveUnit.y*cmd.moveMag,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
     420-footRightUp,Right_z-20,Right_x,
     0, 0, 0
@@ -327,13 +260,13 @@ bool stateUpdate(){
 
     if(cmd.isSp1){
       robotState = SP1;
-    }else if(cmd.moveSpeed.y != 0){
+    }else if(cmd.moveUnit.y != 0){
       //前進後退
       robotState = MV_X;
-    }else if(cmd.moveSpeed.x != 0){
+    }else if(cmd.moveUnit.x != 0){
       //左右移動
       robotState = MV_Y;
-    }else if(cmd.moveAngle != 0){
+    }else if(cmd.lookUnit != 0){
       //方向変更
       robotState = MV_TURN;
     }else if(cmd.isSp2){
@@ -381,7 +314,7 @@ long motionTimeOrigin = 0;
 void motorTask(void *pvParameters) {
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  TickType_t xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps)); 
+  TickType_t xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
 
   while(1){
     if (stateUpdate()) {
@@ -393,24 +326,24 @@ void motorTask(void *pvParameters) {
 
     switch (robotState) {
       case MV_X:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps)); 
-        if(MV_X_F(motionTime)){
+        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::MV_X_FPS)); 
+        if(MV_X_F(motionTime,Config::MV_X_PARAM)){
           motionTimeOrigin = millis(); 
           motionStep = 0; 
         }
         break;
 
       case MV_Y:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps)); 
-        if(MV_Y_F(motionTime)){
+        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::MV_Y_FPS)); 
+        if(MV_Y_F(motionTime,Config::MV_Y_PARAM)){
           motionTimeOrigin = millis(); 
           motionStep = 0; 
         }
         break;
 
       case SP1:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps)); 
-        if(MV_FREE_F(motionTime)){
+        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::MV_FREE_FPS)); 
+        if(MV_FREE_F(motionTime,Config::MV_FREE_PARAM)){
           motionTimeOrigin = millis(); 
           motionStep = 0; 
         }
@@ -418,11 +351,11 @@ void motorTask(void *pvParameters) {
 
       case SP2:
         ZERO_F();
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / MV_X_fps));
+        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS));
         break;
 
       case IDLE:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / IDLE_fps)); 
+        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
         IDLE_F();
         break;
 
@@ -437,13 +370,13 @@ void motorTask(void *pvParameters) {
 }
 /*-------------------------------------*/
 //準備関数（setup）
-servoICS::Servo servoDEMOS(ServoSerial,enPin,5);
+servoICS::Servo servoDEMOS(Config::ServoSerial,Config::enPin,5);
 void setup() {
 
-  Serial.begin(bpsPC);
-  ServoSerial->begin(bpsServo,SERIAL_8E1,rxPin,txPin);  //SERIAL_8E1がICS規格で使用されている。
+  Serial.begin(Config::bpsPC);
+  Config::ServoSerial->begin(Config::bpsServo,SERIAL_8E1,Config::rxPin,Config::txPin);  //SERIAL_8E1がICS規格で使用されている。
   
-  Dualshock4.begin(ControllerMac);
+  Dualshock4.begin(Config::ControllerMac);
   bondReset();
 
   leftFoot.setOffset(7620,7500,7452,7168,7514);
