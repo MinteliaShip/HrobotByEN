@@ -4,27 +4,29 @@
 #include <servoICS.h>
 #include <ArduinoEigen.h>
 #include <math.h>
+#include "ConfigDef.h"
 
 class FootController{
+  private:
     struct footJoint5
     {
-        float J1;
-        float J2;
-        float J3;
-        float J4;
-        float J5;
+      float J1;
+      float J2;
+      float J3;
+      float J4;
+      float J5;
     };
 
   public:
     struct
     {
-        char J1_ID;
-        char J2_ID;
-        char J3_ID;
-        char J4_ID;
-        char J5_ID;
-        char enPin;
-        Stream* stream;
+      char J1_ID;
+      char J2_ID;
+      char J3_ID;
+      char J4_ID;
+      char J5_ID;
+      char enPin;
+      Stream* stream;
     }typedef IcsServoConfig;
 
     struct Pose
@@ -49,7 +51,7 @@ class FootController{
       float L8;
     };
 
-    private:
+  private:
     leng8 footLeng;
     servoICS::Servo servoJ1;
     servoICS::Servo servoJ2;
@@ -57,19 +59,25 @@ class FootController{
     servoICS::Servo servoJ4;
     servoICS::Servo servoJ5;
 
-    public:
+  public:
     FootController(IcsServoConfig IcsServoConfig_, leng8 footLeng_);
 
     void setJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_);
     void setJointAnglesDeg(float J1_,float J2_,float J3_,float J4_,float J5_);
     void setJointAnglesRad(float J1_,float J2_,float J3_,float J4_,float J5_);
 
+    void setJointStretch(unsigned char stretch);
+
+    void getJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_);
+
     void setOffset(long J1_,long J2_,long J3_,long J4_,long J5_);
     void DemoPos();
 
     void setTargetPose(const Pose& targetPos,int mode=0);
 
-    private:
+    void setJointSkip(bool skip);
+
+  private:
     //計算補助関数
     float calcAngle(float LengA, float LengB, float LengC);
     float length(float x, float y, float z = 0);

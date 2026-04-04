@@ -3,27 +3,19 @@
 #include <PS4Controller.h>
 #include <esp_gap_bt_api.h>
 
-
-struct Vector2 {
-  float x;
-  float y;
-  Vector2(float _x = 0.0f, float _y = 0.0f) : x(_x), y(_y) {}
-};
-
-
-
 #include "controller_to_command.h"
-
 #include "FootController.h"
-
 #include "Config.h"
-
+#include "ConfigDef.h"
+#include "Vector.h"
 
 /*宣言・初期化・定数*/
 PS4Controller Dualshock4;
 ControllerApp::CommandConverter OpeCom(&Dualshock4.data,Config::mapping);
 FootController leftFoot(Config::leftfootConfig,Config::lengs8);
 FootController rightFoot(Config::rightfootConfig,Config::lengs8);
+
+
 
 /*-------------------------------------*/
 //歩行軌道生成
@@ -54,10 +46,6 @@ float tread_x(float Wd,float T,float Duty,float ts_){
   float AngV = PI*2.0/((1.0-Duty)*T);
   float t_1 = Duty*T/2.0;
   float t_2 = T-Duty*T/2.0;
-
-  Serial.printf("A:%f, AngV:%f, t_1:%f, t_2:%f\n",A,AngV,t_1,t_2);
-  Serial.printf("ts_:%f\n",ts_);
-
   float x_ = 0.0;
 
   if (ts_ < t_1) {
@@ -78,6 +66,33 @@ Vector2 tread(float h,float Wd,float DutyX,float DutyY,float T,float ts){
   result.x = tread_x(Wd,T,DutyX,ts);
   result.y = tread_y(h,T,DutyY,ts);
   return result;
+}
+/*-------------------------------------*/
+//歩行重心移動
+float tread_z(float p,float T,float Duty,float ts_){
+  float T_ = (2*Duty-1)*T;
+  float av = 2*PI/T_;
+
+  float section2 = T*(1-Duty)/2;
+  float section3 = T/2*Duty;
+  float section4 = T*(2-Duty)/2;
+  float section5 = T*(1+Duty)/2;
+
+  float z_ = 0.0;
+
+  if (ts_ < section2) {//1
+    z_ = p;
+  } else if(ts_ < section3){//2
+    z_ = p*cos(av*(ts_-section2));
+  } else if(ts_ < section4){//3
+    z_ = -p;
+  } else if(ts_ < section5){//4
+    z_ = -p*cos(av*(ts_-section4));
+  } else{//5
+    z_ = p;
+  }
+
+  return z_;
 }
 /*-------------------------------------*/
 //サポート関数
@@ -113,6 +128,12 @@ void bondReset(){
 //動作関数
 //前後方向移動
 bool MV_X_F(long motionTime,GaitParameters GaitParameters_){
+  leftFoot.setJointSkip(true);
+  rightFoot.setJointSkip(true);
+
+  #ifdef DEBUG
+  Serial.printf("MV_X_F\n");
+  #endif
 
   float T = GaitParameters_.T;
   float h = GaitParameters_.h;
@@ -121,17 +142,18 @@ bool MV_X_F(long motionTime,GaitParameters GaitParameters_){
   float DutyY = GaitParameters_.DutyY;
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
+  float z = tread_z(30,T,DutyY+0.1,motionTime*0.001);
 
-  auto leftPos_ = tread(h,Wd*(-cmd.moveUnit.y * cmd.moveMag),DutyX,DutyY,T,motionTime*0.001);
+  auto leftPos_ = tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,motionTime*0.001);
   FootController::Pose leftPose={
-    420-leftPos_.y,20,leftPos_.x,
+    420-leftPos_.y,-Config::MV_X_SPAC+z,leftPos_.x,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  auto rightPos_ = tread(h,Wd*(-cmd.moveUnit.y * cmd.moveMag),DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
+  auto rightPos_ = tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
-    420-rightPos_.y,-20,rightPos_.x,
+    420-rightPos_.y,+Config::MV_X_SPAC+z,rightPos_.x,
     0, 0, 0
   };
   rightFoot.setTargetPose(rightPos);
@@ -142,8 +164,16 @@ bool MV_X_F(long motionTime,GaitParameters GaitParameters_){
     return true;
   }
 }
+
 //左右方向移動
 bool MV_Y_F(long motionTime,GaitParameters GaitParameters_){
+  leftFoot.setJointSkip(true);
+  rightFoot.setJointSkip(true);
+
+  #ifdef DEBUG
+  Serial.printf("MV_Y_F\n");
+  #endif
+
   float T = GaitParameters_.T;
   float h = GaitParameters_.h;
   float Wd = GaitParameters_.Wd;
@@ -152,16 +182,17 @@ bool MV_Y_F(long motionTime,GaitParameters GaitParameters_){
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
-  auto leftPos_ = tread(h,Wd*(-cmd.moveUnit.x * cmd.moveMag),DutyX,DutyY,T,motionTime*0.001);
+
+  auto leftPos_ = tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,motionTime*0.001);
   FootController::Pose leftPose={
-    420-leftPos_.y,leftPos_.x+20,0,
+    420-leftPos_.y,leftPos_.x-Config::MV_Y_SPAC,0,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  auto rightPos_ = tread(h,Wd*(-cmd.moveUnit.x * cmd.moveMag),DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
+  auto rightPos_ = tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
-    420-rightPos_.y,rightPos_.x-20,0,
+    420-rightPos_.y,rightPos_.x+Config::MV_Y_SPAC,0,
     0, 0, 0
   };
   rightFoot.setTargetPose(rightPos);
@@ -172,8 +203,16 @@ bool MV_Y_F(long motionTime,GaitParameters GaitParameters_){
     return true;
   }
 }
+
 //平行移動
 bool MV_FREE_F(long motionTime,GaitParameters GaitParameters_){
+  leftFoot.setJointSkip(true);
+  rightFoot.setJointSkip(true);
+
+  #ifdef DEBUG
+  Serial.printf("MV_FREE_F\n");
+  #endif
+
   float T = GaitParameters_.T;
   float h = GaitParameters_.h;
   float Wd = GaitParameters_.Wd;
@@ -183,19 +222,19 @@ bool MV_FREE_F(long motionTime,GaitParameters GaitParameters_){
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
   float footLeftUp = tread_y(h,T,DutyY,motionTime*0.001);
-  float Left_x = tread_x(Wd*-cmd.moveUnit.x*cmd.moveMag,T,DutyX,motionTime*0.001);
-  float Left_z = tread_x(Wd*-cmd.moveUnit.y*cmd.moveMag,T,DutyX,motionTime*0.001);
+  float Left_x = tread_x(Wd*-cmd.move.x,T,DutyX,motionTime*0.001);
+  float Left_z = tread_x(Wd*-cmd.move.y,T,DutyX,motionTime*0.001);
   FootController::Pose leftPose={
-    420-footLeftUp,Left_z+20,Left_x,
+    420-footLeftUp,Left_x-Config::MV_FREE_SPAC,Left_z,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
   float footRightUp = tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_x = tread_x(Wd*-cmd.moveUnit.x*cmd.moveMag,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_z = tread_x(Wd*-cmd.moveUnit.y*cmd.moveMag,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
+  float Right_x = tread_x(Wd*-cmd.move.x,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
+  float Right_z = tread_x(Wd*-cmd.move.y,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
-    420-footRightUp,Right_z-20,Right_x,
+    420-footRightUp,Right_x+Config::MV_FREE_SPAC,Right_z,
     0, 0, 0
   };
   rightFoot.setTargetPose(rightPos);
@@ -205,34 +244,42 @@ bool MV_FREE_F(long motionTime,GaitParameters GaitParameters_){
   }else{
     return true;
   }
-
 }
+
 //アイドル状態（待機）
 void IDLE_F(){
-  //直立
+  leftFoot.setJointSkip(false);
+  rightFoot.setJointSkip(false);
+  
+  #ifdef DEBUG
+  Serial.printf("IDLE_F\n");
+  #endif
+  //足曲げ立ち
   FootController::Pose Pose={
-    420,20,0,
+    420,-Config::IDLE_SPAC,0,
     0,0,0
   };
   leftFoot.setTargetPose(Pose);
-  Pose.Y = -20;
+  Pose.Y = +Config::IDLE_SPAC;
   rightFoot.setTargetPose(Pose);
 }
 
 //攻撃1
 void ACT_ATTACK1_F(){
-  Serial.println("[Demo:left]");
-  leftFoot.DemoPos();
-  //Serial.println("[Demo:right]");
-  //rightFoot.DemoPos();
+  Serial.println("[Demo]");
 }
 
 //足サーボ零点移動
 void ZERO_F(){
+  //直立
+  leftFoot.setJointSkip(false);
+  rightFoot.setJointSkip(false);
+
   leftFoot.setJointAngles(7500,7500,7500,7500,7500);
   rightFoot.setJointAngles(7500,7500,7500,7500,7500);
   Serial.println("[zero]");
 }
+
 /*-------------------------------------*/
 //ステート管理
 enum RobotState {
@@ -258,15 +305,14 @@ bool stateUpdate(){
     OpeCom.update();
     ControllerApp::Commands cmd = OpeCom.getCommands();
 
+    #ifdef DEBUG
+    Serial.printf("UnitY:%f UnitX:%f LookX:%f\n robotState:%d\n",cmd.move.y,cmd.move.x, cmd.look,robotState);
+    #endif
+
     if(cmd.isSp1){
+      //SP1
       robotState = SP1;
-    }else if(cmd.moveUnit.y != 0){
-      //前進後退
-      robotState = MV_X;
-    }else if(cmd.moveUnit.x != 0){
-      //左右移動
-      robotState = MV_Y;
-    }else if(cmd.lookUnit != 0){
+    }else if(cmd.look > 0.5){
       //方向変更
       robotState = MV_TURN;
     }else if(cmd.isSp2){
@@ -287,10 +333,17 @@ bool stateUpdate(){
     }else if(cmd.isGetup){
       //起き上がり
       robotState = ACT_GETUP;
+    }else if((abs(cmd.move.x)+abs(cmd.move.y)) > 0.1){
+      if(abs(cmd.move.x) < abs(cmd.move.y)){
+        robotState = MV_X;
+      }else{
+        robotState = MV_Y;
+      }
     }else{
       //IDLE
       robotState = IDLE;
     }
+
     lastRecvTime = millis();
   }else{
     if(lastRecvTime+1000 < millis()){//最終接続から1秒経過しても接続されない場合。
@@ -372,15 +425,20 @@ void motorTask(void *pvParameters) {
 //準備関数（setup）
 servoICS::Servo servoDEMOS(Config::ServoSerial,Config::enPin,5);
 void setup() {
-
   Serial.begin(Config::bpsPC);
-  Config::ServoSerial->begin(Config::bpsServo,SERIAL_8E1,Config::rxPin,Config::txPin);  //SERIAL_8E1がICS規格で使用されている。
+  if(Config::ServoSerial != &Serial)Config::ServoSerial->begin(Config::bpsServo,SERIAL_8E1,Config::rxPin,Config::txPin);
+  //SERIAL_8E1がICS規格で使用されている。
+
+
   
   Dualshock4.begin(Config::ControllerMac);
   bondReset();
 
-  leftFoot.setOffset(7620,7500,7452,7168,7514);
-  rightFoot.setOffset(7726,7376,7378,7429,7586);
+  Serial.printf("Hello World!\n");
+  #ifndef SIMULATION
+  leftFoot.setOffset(7726,7466,7378,7429,7576);
+  rightFoot.setOffset(7620,7509,7452,7168,7638);
+  #endif
 
   xTaskCreateUniversal(
     motorTask,      // 関数名

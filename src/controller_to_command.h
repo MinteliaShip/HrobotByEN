@@ -2,10 +2,12 @@
 #define CONTROLLER_TO_COMMAND_HPP
 
 #include <cstdint>
+#include <cmath>
 #include <PS4Controller.h>
 
-namespace ControllerApp {
+#include "Vector.h"
 
+namespace ControllerApp {
 // Config.h 等に定義
     enum ButtonID : uint8_t {
         BTN_NONE = 0,
@@ -88,18 +90,6 @@ namespace ControllerApp {
         {}
     };
 
-    //2次元ベクトルの正方化
-    Vector2 Normalized(Vector2 input) {
-        // ベクトルの大きさ
-        float magnitude = sqrt(input.x * input.x + input.y * input.y);
-        // 0除算を防ぐため、一定以上の入力がある場合のみ計算
-        if (magnitude > 0.001f) {
-            return Vector2(input.x / magnitude, input.y / magnitude);
-        }
-        // 入力がデッドゾーン内などで極めて小さい場合はゼロベクトルを返す
-        return Vector2(0.0f, 0.0f);
-    }
-
 
     // コマンド（動作）の定義をまとめる
     struct Commands {
@@ -116,11 +106,11 @@ namespace ControllerApp {
         bool isSquat=0;     //しゃがみモーション
         bool isTaunt=0;     //特殊モーション
 
-        Vector2 moveUnit = {0.0f, 0.0f};
-        float moveMag;
+        Vector2 move = {0.0f, 0.0f};
 
-        float lookUnit;
+        float look;
     };
+
 
 
     class CommandConverter {
@@ -129,7 +119,7 @@ namespace ControllerApp {
         controllerMapping mapping_;
         Commands cmd_;
         Commands lastCmd_;
-        int deadzone = 30;
+        int deadzone = 20;
 
         bool getButtonState(const ps4_button_t& data, ButtonID id) {
             switch (id) {
@@ -190,40 +180,56 @@ namespace ControllerApp {
             //0±deadzone以内の値はすべて0として扱う。倒していないときには確実に0になるよう調整。
             int move_x = getAnalogValue(inData_->analog,mapping_.moveX);
             int move_y = getAnalogValue(inData_->analog,mapping_.moveY);
-            if(move_x > deadzone){//deadzoneを超えたとき
-                move_x-=deadzone;
-            }else if(move_x < -deadzone){//-deadzone未満のとき
-                move_x+=deadzone;
-            }else{
+
+            int look = getAnalogValue(inData_->analog,mapping_.lookX);
+
+            if(move_x == -128){
+                move_x = -127;
+            }
+            if(move_y == -128){
+                move_y = -127;
+            }
+            if(look == -128){
+                look = -127;
+            }
+
+            if(abs(move_x) < deadzone){
                 move_x = 0;
-            }
-
-            if(move_y > deadzone){//deadzoneを超えたとき
-                move_y-=deadzone;
-            }else if(move_y < -deadzone){//-deadzone未満のとき
-                move_y+=deadzone;
+            }else if(move_x > 0){
+                move_x -= deadzone;
             }else{
+                move_x += deadzone;            
+            }
+            if(abs(move_y) < deadzone){
                 move_y = 0;
+            }else if(move_y > 0){
+                move_y -= deadzone;
+            }else{
+                move_y += deadzone;            
+            }
+            if(abs(look) < deadzone){
+                look = 0;
+            }else if(look > 0){
+                look -= deadzone;
+            }else{
+                look += deadzone;            
             }
 
-            if(move_x <= -128 + deadzone)move_x = -127 + deadzone;
-            if(move_y <= -128 + deadzone)move_y = -127 + deadzone;
 
-            move_x = static_cast<float>(map(move_x,-127 + deadzone,127 - deadzone,-1000,1000) * 0.001f);
-            move_y = static_cast<float>(map(move_y,-127 + deadzone,127 - deadzone,-1000,1000) * 0.001f);
+            float move_x_f = map(move_x,-127+deadzone,127-deadzone,-100,100)*0.01;
+            float move_y_f = map(move_y,-127+deadzone,127-deadzone,-100,100)*0.01;
+            float look_f = map(look,-127+deadzone,127-deadzone,-100,100)*0.01;
 
-            cmd_.moveUnit =  Normalized(Vector2(move_x,move_y));
-            cmd_.moveMag = sqrt(move_x*move_x+move_y*move_y);
+            cmd_.move = Vector2(move_x_f,move_y_f);
+            cmd_.look = look_f;
 
-            cmd_.lookUnit = getAnalogValue(inData_->analog,mapping_.lookX);
-            
             cmd_.isAttack1 = getButtonState(inData_->button,mapping_.attack1);
             cmd_.isAttack2 = getButtonState(inData_->button,mapping_.attack2);
             cmd_.isAttack3 = getButtonState(inData_->button,mapping_.attack3);
             cmd_.isAttack4 = getButtonState(inData_->button,mapping_.attack4);
-
+            
             cmd_.isTaunt = getButtonState(inData_->button,mapping_.taunt);
-
+            
             cmd_.isGetup = getButtonState(inData_->button,mapping_.getup);
             cmd_.isSquat = getButtonState(inData_->button,mapping_.squat);
 
@@ -232,6 +238,5 @@ namespace ControllerApp {
         }
     };
 
-} // namespace ControllerApp
-
+}
 #endif

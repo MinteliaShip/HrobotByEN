@@ -1,5 +1,3 @@
-
-
 #include "FootController.h"
 
 FootController::FootController(IcsServoConfig IcsServoConfig_, leng8 footLeng_){
@@ -8,6 +6,7 @@ FootController::FootController(IcsServoConfig IcsServoConfig_, leng8 footLeng_){
   servoJ3.attach(IcsServoConfig_.stream,IcsServoConfig_.enPin,IcsServoConfig_.J3_ID);
   servoJ4.attach(IcsServoConfig_.stream,IcsServoConfig_.enPin,IcsServoConfig_.J4_ID);
   servoJ5.attach(IcsServoConfig_.stream,IcsServoConfig_.enPin,IcsServoConfig_.J5_ID);
+  
   footLeng = footLeng_;
 }
 
@@ -65,24 +64,32 @@ void FootController::setTargetPose(const Pose& targetPose,int mode){
       joint.J4 = -PI + calcAngle(LengQ, footLeng.L5, footLeng.L4);
   }
 
-  /*シミュレーション(Unity)
-    setJointAnglesRad(
+  #ifdef SIMULATION
+  setJointAnglesRad(
     joint.J1,
     joint.J2,
     joint.J3,
     joint.J4 + joint.J3,//平行リンクのため
     joint.J5
   );
-  */
-
-
+  #else
   setJointAnglesRad(
     joint.J1,
     joint.J2,
     -joint.J3,
     joint.J4 + joint.J3,//平行リンクのため
-    joint.J5
+    -joint.J5
   );
+  #endif
+
+}
+
+void FootController::setJointStretch(unsigned char stretch){
+  servoJ1.setStretch(stretch);
+  servoJ2.setStretch(stretch);
+  servoJ3.setStretch(stretch);
+  servoJ4.setStretch(stretch);
+  servoJ5.setStretch(stretch);
 }
 
 void FootController::setOffset(long J1_,long J2_,long J3_,long J4_,long J5_){
@@ -93,6 +100,14 @@ void FootController::setOffset(long J1_,long J2_,long J3_,long J4_,long J5_){
   servoJ5.setOffset(J5_);
 }
 
+void FootController::setJointSkip(bool skip){
+  servoJ1.setSkip(skip);
+  servoJ2.setSkip(skip);
+  servoJ3.setSkip(skip);
+  servoJ4.setSkip(skip);
+  servoJ5.setSkip(skip);
+}
+
 void FootController::DemoPos(){
   Serial.printf("J1:%d \n",servoJ1.setPos(0).getPos().value);
   Serial.printf("J2:%d \n",servoJ2.setPos(0).getPos().value);
@@ -100,7 +115,6 @@ void FootController::DemoPos(){
   Serial.printf("J4:%d \n",servoJ4.setPos(0).getPos().value);
   Serial.printf("J5:%d \n",servoJ5.setPos(0).getPos().value);
 }
-
 
 //計算補助
 float FootController::calcAngle(float LengA, float LengB, float LengC)
