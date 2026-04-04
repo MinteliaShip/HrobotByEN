@@ -5,6 +5,8 @@
 #include <ArduinoEigen.h>
 #include <math.h>
 #include "ConfigDef.h"
+#include "Vector.h"
+
 
 class FootController{
   private:
@@ -59,8 +61,13 @@ class FootController{
     servoICS::Servo servoJ4;
     servoICS::Servo servoJ5;
 
+    footJoint5 IK(const Pose& targetPose,int mode);
   public:
     FootController(IcsServoConfig IcsServoConfig_, leng8 footLeng_);
+
+    float tread_y(float h,float T,float Duty,float ts_);
+    float tread_x(float Wd,float T,float Duty,float ts_);
+    Vector2 tread(float h,float Wd,float DutyX,float DutyY,float T,float ts);
 
     void setJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_);
     void setJointAnglesDeg(float J1_,float J2_,float J3_,float J4_,float J5_);
@@ -73,7 +80,7 @@ class FootController{
     void setOffset(long J1_,long J2_,long J3_,long J4_,long J5_);
     void DemoPos();
 
-    void setTargetPose(const Pose& targetPos,int mode=0);
+    void setTargetPose(const Pose& targetPos,float kick=0,int mode=0);
 
     void setJointSkip(bool skip);
 

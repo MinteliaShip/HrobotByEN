@@ -16,84 +16,6 @@ FootController leftFoot(Config::leftfootConfig,Config::lengs8);
 FootController rightFoot(Config::rightfootConfig,Config::lengs8);
 
 
-
-/*-------------------------------------*/
-//歩行軌道生成
-float tread_y(float h,float T,float Duty,float ts_){
-  float A  = 2.0*h / (1.0-Duty);
-  float AngV = PI*4.0/((1.0-Duty)*T);
-  float t_1 = Duty*T/2.0;
-  float t_2 = T/2.0;
-  float t_3 = T-Duty*T/2.0;
-
-  float y_ = 0.0;
-
-  if (ts_ < t_1) {
-      y_ = 0;
-  }else if (ts_ < t_2) {
-      y_ = -A / (2 * AngV) * sin(AngV * (ts_ - t_1)) + A / 2 * (ts_ - t_1);
-  }else if(ts_ < t_3) {
-      y_ = A / (2 * AngV) * sin(AngV * (ts_ - t_2)) - A / 2 * (ts_ - t_2) + (1.0 - Duty) * T * A / 4.0;
-  }else {
-      y_ = 0;
-  }
-  return y_;
-}
-
-float tread_x(float Wd,float T,float Duty,float ts_){
-
-  float A  = 2.0*Wd / (1.0-Duty);
-  float AngV = PI*2.0/((1.0-Duty)*T);
-  float t_1 = Duty*T/2.0;
-  float t_2 = T-Duty*T/2.0;
-  float x_ = 0.0;
-
-  if (ts_ < t_1) {
-      x_ = -Wd * ts_;
-  } 
-  else if (ts_ < t_2) {
-      float dt = ts_ - t_1;
-      x_ = -A / (2.0f * AngV) * sinf(AngV * dt) + (A * 0.5f - Wd) * dt - Wd * t_1;
-  } 
-  else {
-      x_ = -Wd * (ts_ - t_2) + Wd * t_1;
-  }
-  return x_;
-}
-
-Vector2 tread(float h,float Wd,float DutyX,float DutyY,float T,float ts){
-  Vector2 result;
-  result.x = tread_x(Wd,T,DutyX,ts);
-  result.y = tread_y(h,T,DutyY,ts);
-  return result;
-}
-/*-------------------------------------*/
-//歩行重心移動
-float tread_z(float p,float T,float Duty,float ts_){
-  float T_ = (2*Duty-1)*T;
-  float av = 2*PI/T_;
-
-  float section2 = T*(1-Duty)/2;
-  float section3 = T/2*Duty;
-  float section4 = T*(2-Duty)/2;
-  float section5 = T*(1+Duty)/2;
-
-  float z_ = 0.0;
-
-  if (ts_ < section2) {//1
-    z_ = p;
-  } else if(ts_ < section3){//2
-    z_ = p*cos(av*(ts_-section2));
-  } else if(ts_ < section4){//3
-    z_ = -p;
-  } else if(ts_ < section5){//4
-    z_ = -p*cos(av*(ts_-section4));
-  } else{//5
-    z_ = p;
-  }
-
-  return z_;
-}
 /*-------------------------------------*/
 //サポート関数
 //時間ずらし
@@ -142,18 +64,17 @@ bool MV_X_F(long motionTime,GaitParameters GaitParameters_){
   float DutyY = GaitParameters_.DutyY;
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
-  float z = tread_z(30,T,DutyY+0.1,motionTime*0.001);
 
-  auto leftPos_ = tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,motionTime*0.001);
+  auto leftPos_ = leftFoot.tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,motionTime*0.001);
   FootController::Pose leftPose={
-    420-leftPos_.y,-Config::MV_X_SPAC+z,leftPos_.x,
+    420-leftPos_.y,-Config::MV_X_SPAC,leftPos_.x,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  auto rightPos_ = tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
+  auto rightPos_ = rightFoot.tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
-    420-rightPos_.y,+Config::MV_X_SPAC+z,rightPos_.x,
+    420-rightPos_.y,+Config::MV_X_SPAC,rightPos_.x,
     0, 0, 0
   };
   rightFoot.setTargetPose(rightPos);
@@ -183,14 +104,14 @@ bool MV_Y_F(long motionTime,GaitParameters GaitParameters_){
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
 
-  auto leftPos_ = tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,motionTime*0.001);
+  auto leftPos_ = leftFoot.tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,motionTime*0.001);
   FootController::Pose leftPose={
     420-leftPos_.y,leftPos_.x-Config::MV_Y_SPAC,0,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  auto rightPos_ = tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
+  auto rightPos_ = rightFoot.tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
     420-rightPos_.y,rightPos_.x+Config::MV_Y_SPAC,0,
     0, 0, 0
@@ -221,18 +142,18 @@ bool MV_FREE_F(long motionTime,GaitParameters GaitParameters_){
 
   ControllerApp::Commands cmd = OpeCom.getCommands();
 
-  float footLeftUp = tread_y(h,T,DutyY,motionTime*0.001);
-  float Left_x = tread_x(Wd*-cmd.move.x,T,DutyX,motionTime*0.001);
-  float Left_z = tread_x(Wd*-cmd.move.y,T,DutyX,motionTime*0.001);
+  float footLeftUp = leftFoot.tread_y(h,T,DutyY,motionTime*0.001);
+  float Left_x = leftFoot.tread_x(Wd*-cmd.move.x,T,DutyX,motionTime*0.001);
+  float Left_z = leftFoot.tread_x(Wd*-cmd.move.y,T,DutyX,motionTime*0.001);
   FootController::Pose leftPose={
     420-footLeftUp,Left_x-Config::MV_FREE_SPAC,Left_z,
     0, 0, 0
   };
   leftFoot.setTargetPose(leftPose);
 
-  float footRightUp = tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_x = tread_x(Wd*-cmd.move.x,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_z = tread_x(Wd*-cmd.move.y,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
+  float footRightUp = rightFoot.tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
+  float Right_x = rightFoot.tread_x(Wd*-cmd.move.x,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
+  float Right_z = rightFoot.tread_x(Wd*-cmd.move.y,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
   FootController::Pose rightPos={
     420-footRightUp,Right_x+Config::MV_FREE_SPAC,Right_z,
     0, 0, 0
@@ -295,6 +216,7 @@ enum RobotState {
   SP2,
   ACT_GETUP
 };
+
 
 RobotState robotState = IDLE;
 //無操作時間の記録のため
@@ -369,7 +291,16 @@ void motorTask(void *pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
   TickType_t xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
 
+
+
   while(1){
+    #ifdef DEBUG
+    static long LastTime=0;
+    long NowTime = millis();
+    Serial.printf("T%d\n",NowTime-LastTime);
+    LastTime = NowTime;
+    #endif
+
     if (stateUpdate()) {
       motionStep = 0; 
       motionTimeOrigin = millis(); 
