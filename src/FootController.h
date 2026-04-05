@@ -68,6 +68,8 @@ class FootController{
     float tread_y(float h,float T,float Duty,float ts_);
     float tread_x(float Wd,float T,float Duty,float ts_);
     Vector2 tread(float h,float Wd,float DutyX,float DutyY,float T,float ts);
+    float tread_kick(float kickAngle,float T1,float T,float Duty,float ts);
+
 
     void setJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_);
     void setJointAnglesDeg(float J1_,float J2_,float J3_,float J4_,float J5_);

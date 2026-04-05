@@ -94,6 +94,22 @@ Vector2 FootController::tread(float h,float Wd,float DutyX,float DutyY,float T,f
   result.y = tread_y(h,T,DutyY,ts);
   return result;
 }
+
+/*-------------------------------------*/
+float FootController::tread_kick(float kickAngle,float T1,float T,float Duty,float ts){
+  float av = 2*PI/T1;
+  
+  float kick=0;
+  if(ts<(Duty*T/2.0)-T1){
+    kick = 0;
+  }else if(ts<Duty*T/2.0){
+    kick = -kickAngle*cos(av*(ts-(Duty*T/2.0)-T1))+kickAngle;
+  }else{
+    kick = 0;
+  }
+  return kick;
+}
+
 /*-------------------------------------*/
 //歩行重心移動
 float tread_z(float p,float T,float Duty,float ts_){

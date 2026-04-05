@@ -99,7 +99,11 @@ void MV_X_F(GaitParameters Para = Config::MV_X_PARAM){
     #endif
 
     Vector2 leftPosXY = leftFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,t);
+    float leftKick = leftFoot.tread_kick(15*PI/180.0,Para.T/8.0,Para.T,Para.DutyY,t);
+    
     Vector2 rightPosXY = rightFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,phaseShift_f(t,Para.T/2.0));
+    float rightKick = rightFoot.tread_kick(15*PI/180.0,Para.T/8.0,Para.T,Para.DutyY,phaseShift_f(t,Para.T/2.0));
+
 
     FootController::Pose leftPos={
       420-leftPosXY.y,-Para.Spac,leftPosXY.x,
@@ -109,8 +113,8 @@ void MV_X_F(GaitParameters Para = Config::MV_X_PARAM){
       420-rightPosXY.y,+Para.Spac,rightPosXY.x,
       0, 0, 0
     };
-    leftFoot.setTargetPose(leftPos);
-    rightFoot.setTargetPose(rightPos);
+    leftFoot.setTargetPose(leftPos,leftKick);
+    rightFoot.setTargetPose(rightPos,-rightKick);
 
     if(robotState != MV_X)break;
     vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
