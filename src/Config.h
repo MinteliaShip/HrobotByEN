@@ -13,7 +13,9 @@ struct GaitParameters {
   float Wd;
   float DutyX;
   float DutyY;
-  GaitParameters(float T_, float h_, float Wd_, float DutyX_, float DutyY_) : T(T_), h(h_), Wd(Wd_), DutyX(DutyX_), DutyY(DutyY_){}
+  int Fps;
+  float Spac;
+  GaitParameters(float T_, float h_, float Wd_, float DutyX_, float DutyY_, int Fps_, float Spac_) : T(T_), h(h_), Wd(Wd_), DutyX(DutyX_), DutyY(DutyY_), Fps(Fps_), Spac(Spac_) {}
 };
 
 
@@ -59,34 +61,35 @@ namespace Config {
 
     //歩行軌道のパラメータ
     GaitParameters MV_X_PARAM(
-    1.2,    //T
+    1.5,    //T
     60,     //h
-    50,    //Wd
+    60,    //Wd
     0.7,    //DutyX
-    0.75     //DutyY
+    0.75,     //DutyY
+    40,     //Fps
+    30.0    //Spac
     );
-    int MV_X_FPS = 30;
-    float MV_X_SPAC = 30.0;
 
     GaitParameters MV_FREE_PARAM(
     1.0,    //T
     60,     //h
     100,    //Wd
     0.6,    //DutyX
-    0.65     //DutyY
+    0.65,     //DutyY
+    30,     //Fps
+    20.0    //Spac
     );
-    int MV_Y_FPS = 30;
-    float MV_Y_SPAC = 20.0;
+
 
     GaitParameters MV_Y_PARAM(
     1.0,    //T
     50,      //h
     100,     //Wd
     0.6,    //DutyX
-    0.65     //DutyY
+    0.65,     //DutyY
+    40,     //Fps
+    20.0    //Spac
     );
-    int MV_FREE_FPS = 40; 
-    float MV_FREE_SPAC = 20.0;
 
     int IDEL_FPS = 10;
     float IDLE_SPAC = 20.0;

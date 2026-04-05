@@ -17,10 +17,38 @@ FootController rightFoot(Config::rightfootConfig,Config::lengs8);
 
 
 /*-------------------------------------*/
+//ステート管理
+enum RobotState {
+  IDLE,
+  MV_X,
+  MV_Y,
+  MV_FREE,
+  MV_TURN,
+  ACT_ATTACK1,
+  ACT_ATTACK2,
+  ACT_ATTACK3,
+  ACT_ATTACK4,
+  SP1,
+  SP2,
+  ACT_GETUP
+};
+RobotState robotState = IDLE;
+
+/*-------------------------------------*/
 //サポート関数
 //時間ずらし
 long phaseShift(long inStep,long phaseShift){
   long result = 0;
+  if(phaseShift>inStep){
+    result = inStep + phaseShift;
+  }else{
+    result = inStep - phaseShift;
+  }
+  return result;
+}
+
+float phaseShift_f(float inStep,float phaseShift){
+  float result = 0;
   if(phaseShift>inStep){
     result = inStep + phaseShift;
   }else{
@@ -49,126 +77,139 @@ void bondReset(){
 /*-------------------------------------*/
 //動作関数
 //前後方向移動
-bool MV_X_F(long motionTime,GaitParameters GaitParameters_){
-  leftFoot.setJointSkip(true);
-  rightFoot.setJointSkip(true);
-
+void MV_X_F(GaitParameters Para = Config::MV_X_PARAM){
   #ifdef DEBUG
   Serial.printf("MV_X_F\n");
   #endif
 
-  float T = GaitParameters_.T;
-  float h = GaitParameters_.h;
-  float Wd = GaitParameters_.Wd;
-  float DutyX = GaitParameters_.DutyX;
-  float DutyY = GaitParameters_.DutyY;
-
-  ControllerApp::Commands cmd = OpeCom.getCommands();
-
-  auto leftPos_ = leftFoot.tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,motionTime*0.001);
-  FootController::Pose leftPose={
-    420-leftPos_.y,-Config::MV_X_SPAC,leftPos_.x,
-    0, 0, 0
-  };
-  leftFoot.setTargetPose(leftPose);
-
-  auto rightPos_ = rightFoot.tread(h,Wd*-cmd.move.y,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
-  FootController::Pose rightPos={
-    420-rightPos_.y,+Config::MV_X_SPAC,rightPos_.x,
-    0, 0, 0
-  };
-  rightFoot.setTargetPose(rightPos);
-
-  if((long)(T*1000) > motionTime){
-    return false;
-  }else{
-    return true;
-  }
-}
-
-//左右方向移動
-bool MV_Y_F(long motionTime,GaitParameters GaitParameters_){
   leftFoot.setJointSkip(true);
   rightFoot.setJointSkip(true);
 
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t beginTimeTicks = lastTimeTicks;
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Para.Fps)); 
+  TickType_t actionTimeTicks = pdMS_TO_TICKS(long(Para.T*1000));
+
+  while(lastTimeTicks-beginTimeTicks <= actionTimeTicks){
+    ControllerApp::Commands cmd = OpeCom.getCommands();
+    float t = pdTICKS_TO_MS(lastTimeTicks-beginTimeTicks)*0.001;
+
+    #ifdef DEBUG
+    Serial.printf("MV_X_F:T[%fs]\n",t);
+    #endif
+
+    Vector2 leftPosXY = leftFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,t);
+    Vector2 rightPosXY = rightFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,phaseShift_f(t,Para.T/2.0));
+
+    FootController::Pose leftPos={
+      420-leftPosXY.y,-Para.Spac,leftPosXY.x,
+      0, 0, 0
+    };
+    FootController::Pose rightPos={
+      420-rightPosXY.y,+Para.Spac,rightPosXY.x,
+      0, 0, 0
+    };
+    leftFoot.setTargetPose(leftPos);
+    rightFoot.setTargetPose(rightPos);
+
+    if(robotState != MV_X)break;
+    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+  }
+}
+
+//横移動
+void MV_Y_F(GaitParameters Para = Config::MV_Y_PARAM){
   #ifdef DEBUG
   Serial.printf("MV_Y_F\n");
   #endif
 
-  float T = GaitParameters_.T;
-  float h = GaitParameters_.h;
-  float Wd = GaitParameters_.Wd;
-  float DutyX = GaitParameters_.DutyX;
-  float DutyY = GaitParameters_.DutyY;
-
-  ControllerApp::Commands cmd = OpeCom.getCommands();
-
-
-  auto leftPos_ = leftFoot.tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,motionTime*0.001);
-  FootController::Pose leftPose={
-    420-leftPos_.y,leftPos_.x-Config::MV_Y_SPAC,0,
-    0, 0, 0
-  };
-  leftFoot.setTargetPose(leftPose);
-
-  auto rightPos_ = rightFoot.tread(h,Wd*-cmd.move.x,DutyX,DutyY,T,phaseShift(motionTime,(long)(T*500))*0.001);
-  FootController::Pose rightPos={
-    420-rightPos_.y,rightPos_.x+Config::MV_Y_SPAC,0,
-    0, 0, 0
-  };
-  rightFoot.setTargetPose(rightPos);
-
-  if((long)(T*1000) > motionTime){
-    return false;
-  }else{
-    return true;
-  }
-}
-
-//平行移動
-bool MV_FREE_F(long motionTime,GaitParameters GaitParameters_){
   leftFoot.setJointSkip(true);
   rightFoot.setJointSkip(true);
 
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t beginTimeTicks = lastTimeTicks;
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Para.Fps)); 
+  TickType_t actionTimeTicks = pdMS_TO_TICKS(long(Para.T*1000));
+
+  while(lastTimeTicks-beginTimeTicks <= actionTimeTicks){
+    ControllerApp::Commands cmd = OpeCom.getCommands();
+    float t = pdTICKS_TO_MS(lastTimeTicks-beginTimeTicks)*0.001;
+
+    #ifdef DEBUG
+    Serial.printf("MV_Y_F:T[%fs]\n",t);
+    #endif
+
+    Vector2 leftPosXY = leftFoot.tread(Para.h,Para.Wd*-cmd.move.x,Para.DutyX,Para.DutyY,Para.T,t);
+    Vector2 rightPosXY = rightFoot.tread(Para.h,Para.Wd*-cmd.move.x,Para.DutyX,Para.DutyY,Para.T,phaseShift_f(t,Para.T/2.0));
+
+    FootController::Pose leftPos={
+      420-leftPosXY.y,leftPosXY.x-Para.Spac,0,
+      0, 0, 0
+    };
+    FootController::Pose rightPos={
+      420-rightPosXY.y,rightPosXY.x+Para.Spac,0,
+      0, 0, 0
+    };
+    leftFoot.setTargetPose(leftPos);
+    rightFoot.setTargetPose(rightPos);
+
+    if(robotState != MV_Y)break;
+    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+  }
+}
+
+
+//平行移動
+void MV_FREE_F(GaitParameters Para = Config::MV_Y_PARAM){
   #ifdef DEBUG
   Serial.printf("MV_FREE_F\n");
   #endif
 
-  float T = GaitParameters_.T;
-  float h = GaitParameters_.h;
-  float Wd = GaitParameters_.Wd;
-  float DutyX = GaitParameters_.DutyX;
-  float DutyY = GaitParameters_.DutyY;
+  leftFoot.setJointSkip(true);
+  rightFoot.setJointSkip(true);
 
-  ControllerApp::Commands cmd = OpeCom.getCommands();
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t beginTimeTicks = lastTimeTicks;
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Para.Fps)); 
+  TickType_t actionTimeTicks = pdMS_TO_TICKS(long(Para.T*1000));
 
-  float footLeftUp = leftFoot.tread_y(h,T,DutyY,motionTime*0.001);
-  float Left_x = leftFoot.tread_x(Wd*-cmd.move.x,T,DutyX,motionTime*0.001);
-  float Left_z = leftFoot.tread_x(Wd*-cmd.move.y,T,DutyX,motionTime*0.001);
-  FootController::Pose leftPose={
-    420-footLeftUp,Left_x-Config::MV_FREE_SPAC,Left_z,
-    0, 0, 0
-  };
-  leftFoot.setTargetPose(leftPose);
+  while(lastTimeTicks-beginTimeTicks <= actionTimeTicks){
+    ControllerApp::Commands cmd = OpeCom.getCommands();
+    float t = pdTICKS_TO_MS(lastTimeTicks-beginTimeTicks)*0.001;
 
-  float footRightUp = rightFoot.tread_y(h,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_x = rightFoot.tread_x(Wd*-cmd.move.x,T,DutyX,phaseShift(motionTime,(long)(T*500))*0.001);
-  float Right_z = rightFoot.tread_x(Wd*-cmd.move.y,T,DutyY,phaseShift(motionTime,(long)(T*500))*0.001);
-  FootController::Pose rightPos={
-    420-footRightUp,Right_x+Config::MV_FREE_SPAC,Right_z,
-    0, 0, 0
-  };
-  rightFoot.setTargetPose(rightPos);
+    #ifdef DEBUG
+    Serial.printf("MV_FREE_F:T[%fs]\n",t);
+    #endif
+    
+    float footLeftUp = leftFoot.tread_y(Para.h,Para.T,Para.DutyY,t);
+    float Left_x = leftFoot.tread_x(Para.Wd*-cmd.move.x,Para.T,Para.DutyX,t);
+    float Left_z = leftFoot.tread_x(Para.Wd*-cmd.move.y,Para.T,Para.DutyX,t);
+    FootController::Pose leftPos={
+      420-footLeftUp,Left_x-Para.Spac,Left_z,
+      0, 0, 0
+    };
 
-  if((long)(T*1000) > motionTime){
-    return false;
-  }else{
-    return true;
+    float footRightUp = rightFoot.tread_y(Para.h,Para.T,Para.DutyY,phaseShift_f(t,Para.T/2.0));
+    float Right_x = rightFoot.tread_x(Para.Wd*-cmd.move.x,Para.T,Para.DutyX,phaseShift_f(t,Para.T/2.0));
+    float Right_z = rightFoot.tread_x(Para.Wd*-cmd.move.y,Para.T,Para.DutyX,phaseShift_f(t,Para.T/2.0));
+    FootController::Pose rightPos={
+      420-footRightUp,Right_x+Para.Spac,Right_z,
+      0, 0, 0
+    };
+    
+    leftFoot.setTargetPose(leftPos);
+    rightFoot.setTargetPose(rightPos);
+    
+    if(robotState != MV_FREE)break;
+    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
   }
 }
 
+
 //アイドル状態（待機）
 void IDLE_F(){
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
   leftFoot.setJointSkip(false);
   rightFoot.setJointSkip(false);
   
@@ -183,6 +224,7 @@ void IDLE_F(){
   leftFoot.setTargetPose(Pose);
   Pose.Y = +Config::IDLE_SPAC;
   rightFoot.setTargetPose(Pose);
+  vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
 }
 
 //攻撃1
@@ -201,24 +243,7 @@ void ZERO_F(){
   Serial.println("[zero]");
 }
 
-/*-------------------------------------*/
-//ステート管理
-enum RobotState {
-  IDLE,
-  MV_X,
-  MV_Y,
-  MV_TURN,
-  ACT_ATTACK1,
-  ACT_ATTACK2,
-  ACT_ATTACK3,
-  ACT_ATTACK4,
-  SP1,
-  SP2,
-  ACT_GETUP
-};
 
-
-RobotState robotState = IDLE;
 //無操作時間の記録のため
 int lastRecvTime=0;
 bool stateUpdate(){
@@ -233,7 +258,7 @@ bool stateUpdate(){
 
     if(cmd.isSp1){
       //SP1
-      robotState = SP1;
+      robotState = MV_FREE;
     }else if(cmd.look > 0.5){
       //方向変更
       robotState = MV_TURN;
@@ -288,68 +313,40 @@ int motionStep = 0;
 long motionTimeOrigin = 0;
 void motorTask(void *pvParameters) {
 
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  TickType_t xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
-
-
-
   while(1){
     #ifdef DEBUG
     static long LastTime=0;
     long NowTime = millis();
-    Serial.printf("T%d\n",NowTime-LastTime);
+    //Serial.printf("T%d\n",NowTime-LastTime);
     LastTime = NowTime;
     #endif
 
-    if (stateUpdate()) {
-      motionStep = 0; 
-      motionTimeOrigin = millis(); 
-    }
-    long motionTime = millis() - motionTimeOrigin;
-
-
     switch (robotState) {
       case MV_X:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::MV_X_FPS)); 
-        if(MV_X_F(motionTime,Config::MV_X_PARAM)){
-          motionTimeOrigin = millis(); 
-          motionStep = 0; 
-        }
+        MV_X_F();
         break;
 
+      
       case MV_Y:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::MV_Y_FPS)); 
-        if(MV_Y_F(motionTime,Config::MV_Y_PARAM)){
-          motionTimeOrigin = millis(); 
-          motionStep = 0; 
-        }
+        MV_Y_F();
         break;
 
-      case SP1:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::MV_FREE_FPS)); 
-        if(MV_FREE_F(motionTime,Config::MV_FREE_PARAM)){
-          motionTimeOrigin = millis(); 
-          motionStep = 0; 
-        }
+      case MV_FREE:
+        MV_FREE_F();
         break;
 
       case SP2:
         ZERO_F();
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS));
         break;
-
-      case IDLE:
-        xFrequency = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
-        IDLE_F();
-        break;
-
+      
       case ACT_ATTACK1:
         ACT_ATTACK1_F();
         break;
 
+      case IDLE:
+        IDLE_F();
+        break;
     }
-
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 /*-------------------------------------*/
@@ -385,5 +382,6 @@ void setup() {
 
 
 void loop() {
-  delay(1000);
+  stateUpdate();
+  delay(100);
 }

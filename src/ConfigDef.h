@@ -1,2 +1,2 @@
 #define DEBUG
-//#define SIMULATION
+#define SIMULATION
