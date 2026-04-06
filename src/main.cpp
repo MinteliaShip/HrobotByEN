@@ -14,6 +14,9 @@ PS4Controller Dualshock4;
 ControllerApp::CommandConverter OpeCom(&Dualshock4.data,Config::mapping);
 FootController leftFoot(Config::leftfootConfig,Config::lengs8);
 FootController rightFoot(Config::rightfootConfig,Config::lengs8);
+servoICS::Servo hipServo(Config::ServoSerial,Config::enPin,Config::hipServoID);
+
+
 
 
 /*-------------------------------------*/
@@ -99,10 +102,10 @@ void MV_X_F(GaitParameters Para = Config::MV_X_PARAM){
     #endif
 
     Vector2 leftPosXY = leftFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,t);
-    float leftKick = leftFoot.tread_kick(15*PI/180.0,Para.T/8.0,Para.T,Para.DutyY,t);
+    float leftKick = leftFoot.tread_kick(-35*PI/180.0,0.1/*Para.T/7.0*/,Para.T,Para.DutyY,t);
     
     Vector2 rightPosXY = rightFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,phaseShift_f(t,Para.T/2.0));
-    float rightKick = rightFoot.tread_kick(15*PI/180.0,Para.T/8.0,Para.T,Para.DutyY,phaseShift_f(t,Para.T/2.0));
+    float rightKick = rightFoot.tread_kick(-30*PI/180.0,0.1/*Para.T/7.0*/,Para.T,Para.DutyY,phaseShift_f(t,Para.T/2.0));
 
 
     FootController::Pose leftPos={
@@ -216,6 +219,9 @@ void IDLE_F(){
   TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
   leftFoot.setJointSkip(false);
   rightFoot.setJointSkip(false);
+
+  hipServo.setPos(7500);
+  
   
   #ifdef DEBUG
   Serial.printf("IDLE_F\n");
@@ -366,7 +372,6 @@ void setup() {
   Dualshock4.begin(Config::ControllerMac);
   bondReset();
 
-  Serial.printf("Hello World!\n");
   #ifndef SIMULATION
   leftFoot.setOffset(7726,7466,7378,7429,7576);
   rightFoot.setOffset(7620,7509,7452,7168,7638);

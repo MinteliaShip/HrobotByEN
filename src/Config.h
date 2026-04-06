@@ -37,6 +37,8 @@ namespace Config {
     const char rxPin = 22;
     const long bpsServo = 115200;
 
+    const char hipServoID = 11;
+
     //足寸法
     FootController::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
     FootController::IcsServoConfig rightfootConfig{
@@ -61,13 +63,13 @@ namespace Config {
 
     //歩行軌道のパラメータ
     GaitParameters MV_X_PARAM(
-    1.5,    //T
-    60,     //h
-    60,    //Wd
-    0.7,    //DutyX
-    0.75,     //DutyY
+    0.7,    //T
+    40,     //h
+    120,    //Wd
+    0.8,    //DutyX
+    0.8,     //DutyY
     40,     //Fps
-    30.0    //Spac
+    50.0    //Spac
     );
 
     GaitParameters MV_FREE_PARAM(
@@ -82,17 +84,17 @@ namespace Config {
 
 
     GaitParameters MV_Y_PARAM(
-    1.0,    //T
-    50,      //h
-    100,     //Wd
-    0.6,    //DutyX
-    0.65,     //DutyY
+    0.7,    //T
+    40,     //h
+    120,    //Wd
+    0.8,    //DutyX
+    0.8,     //DutyY
     40,     //Fps
-    20.0    //Spac
+    50.0    //Spac
     );
 
     int IDEL_FPS = 10;
-    float IDLE_SPAC = 20.0;
+    float IDLE_SPAC = 50.0;
 
     ControllerApp::controllerMapping mapping(
         ControllerApp::BTN_L1,          //ATC1
