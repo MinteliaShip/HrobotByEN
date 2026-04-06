@@ -8,6 +8,8 @@
 #include "Config.h"
 #include "ConfigDef.h"
 #include "Vector.h"
+#include "Motion.h"
+#include "frameData.h"
 
 /*宣言・初期化・定数*/
 PS4Controller Dualshock4;
@@ -16,7 +18,39 @@ FootController leftFoot(Config::leftfootConfig,Config::lengs8);
 FootController rightFoot(Config::rightfootConfig,Config::lengs8);
 servoICS::Servo hipServo(Config::ServoSerial,Config::enPin,Config::hipServoID);
 
+servoICS::Servo leftArmJ1(Config::ServoSerial,Config::enPin,Config::leftArmJ1ID);
+servoICS::Servo leftArmJ2(Config::ServoSerial,Config::enPin,Config::leftArmJ2ID);
+servoICS::Servo leftArmJ3(Config::ServoSerial,Config::enPin,Config::leftArmJ3ID);
+servoICS::Servo leftArmJ4(Config::ServoSerial,Config::enPin,Config::leftArmJ4ID);
+servoICS::Servo *leftArm[4]{
+  &leftArmJ1,
+  &leftArmJ2,
+  &leftArmJ3,
+  &leftArmJ4
+};
 
+servoICS::Servo rightArmJ1(Config::ServoSerial,Config::enPin,Config::rightArmJ1ID);
+servoICS::Servo rightArmJ2(Config::ServoSerial,Config::enPin,Config::rightArmJ2ID);
+servoICS::Servo rightArmJ3(Config::ServoSerial,Config::enPin,Config::rightArmJ3ID);
+servoICS::Servo rightArmJ4(Config::ServoSerial,Config::enPin,Config::rightArmJ4ID);
+servoICS::Servo *rightArm[4]{
+  &rightArmJ1,
+  &rightArmJ2,
+  &rightArmJ3,
+  &rightArmJ4
+};
+
+servoICS::Servo *arm[8]{
+  &leftArmJ1,
+  &leftArmJ2,
+  &leftArmJ3,
+  &leftArmJ4,
+  &rightArmJ1,
+  &rightArmJ2,
+  &rightArmJ3,
+  &rightArmJ4
+};
+Motion::MotionController MotionDemo(motionCaptured,500,arm);
 
 
 /*-------------------------------------*/
@@ -33,6 +67,8 @@ enum RobotState {
   ACT_ATTACK4,
   SP1,
   SP2,
+  SP3,
+  SP4,
   ACT_GETUP
 };
 RobotState robotState = IDLE;
@@ -222,7 +258,6 @@ void IDLE_F(){
 
   hipServo.setPos(7500);
   
-  
   #ifdef DEBUG
   Serial.printf("IDLE_F\n");
   #endif
@@ -240,6 +275,45 @@ void IDLE_F(){
 //攻撃1
 void ACT_ATTACK1_F(){
   Serial.println("[Demo]");
+  leftFoot.setJointSkip(true);
+  rightFoot.setJointSkip(true);
+
+  MotionDemo.beginMotion();
+  while(MotionDemo.loopMotion()){
+    TickType_t lastTimeTicks = xTaskGetTickCount();
+    TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::MotionFPS));
+    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+  }
+
+  MotionDemo.endMotion();
+}
+
+void ACT_ATTACK2_F(){
+  Serial.println("[Demo]");
+  leftFoot.setJointSkip(true);
+  rightFoot.setJointSkip(true);
+
+  MotionDemo.beginMotion();
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::MotionFPS));
+  while(MotionDemo.loopMotion()){
+    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+  }
+
+  MotionDemo.endMotion();
+}
+
+void readArm(){
+  leftFoot.setJointSkip(false);
+  rightFoot.setJointSkip(false);
+  Serial.printf("readArm\n");
+  /*
+  for (int i = 0; i < SERVO_NUM; i++) {
+    auto re = arm[i]->setPos(0).getPos();
+    Serial.printf("ID: %d : %d :%s\n",i, re.value, re.error_msg);
+  }
+  */
+  MotionDemo.readMotion(10,500);
 }
 
 //足サーボ零点移動
@@ -273,8 +347,9 @@ bool stateUpdate(){
       //方向変更
       robotState = MV_TURN;
     }else if(cmd.isSp2){
-      //
       robotState = SP2;
+    }else if(cmd.isSp3){
+      robotState = SP3;
     }else if(cmd.isAttack1){
       //攻撃１(零点)
       robotState = ACT_ATTACK1;
@@ -319,23 +394,13 @@ bool stateUpdate(){
 }
 /*-------------------------------------*/
 // モーションの進捗管理用
-int motionStep = 0;
-long motionTimeOrigin = 0;
 void motorTask(void *pvParameters) {
 
   while(1){
-    #ifdef DEBUG
-    static long LastTime=0;
-    long NowTime = millis();
-    //Serial.printf("T%d\n",NowTime-LastTime);
-    LastTime = NowTime;
-    #endif
-
     switch (robotState) {
       case MV_X:
         MV_X_F();
         break;
-
       
       case MV_Y:
         MV_Y_F();
@@ -343,6 +408,10 @@ void motorTask(void *pvParameters) {
 
       case MV_FREE:
         MV_FREE_F();
+        break;
+
+      case SP3:
+        readArm();
         break;
 
       case SP2:
@@ -357,8 +426,12 @@ void motorTask(void *pvParameters) {
         IDLE_F();
         break;
     }
+    delay(1);
   }
 }
+
+
+
 /*-------------------------------------*/
 //準備関数（setup）
 servoICS::Servo servoDEMOS(Config::ServoSerial,Config::enPin,5);
@@ -366,8 +439,6 @@ void setup() {
   Serial.begin(Config::bpsPC);
   if(Config::ServoSerial != &Serial)Config::ServoSerial->begin(Config::bpsServo,SERIAL_8E1,Config::rxPin,Config::txPin);
   //SERIAL_8E1がICS規格で使用されている。
-
-
   
   Dualshock4.begin(Config::ControllerMac);
   bondReset();
@@ -376,6 +447,8 @@ void setup() {
   leftFoot.setOffset(7726,7466,7378,7429,7576);
   rightFoot.setOffset(7620,7509,7452,7168,7638);
   #endif
+
+  
 
   xTaskCreateUniversal(
     motorTask,      // 関数名
@@ -392,5 +465,5 @@ void setup() {
 
 void loop() {
   stateUpdate();
-  delay(100);
+  delay(10);
 }

@@ -67,8 +67,9 @@ namespace ControllerApp {
 
         ButtonID getup;
         ButtonID squat;
-
         ButtonID taunt;
+
+        ButtonID ctrl;
 
         AnalogID moveX;
         AnalogID moveY;
@@ -79,6 +80,7 @@ namespace ControllerApp {
             ButtonID sp1_, ButtonID sp2_,
             ButtonID getup_, ButtonID squat_,
             ButtonID taunt_,
+            ButtonID ctrl_,
             AnalogID moveX_, AnalogID moveY_, AnalogID lookX_
         )
         :
@@ -86,6 +88,7 @@ namespace ControllerApp {
         sp1(sp1_), sp2(sp2_),
         getup(getup_), squat(squat_),
         taunt(taunt_),
+        ctrl(ctrl_),
         moveX(moveX_), moveY(moveY_), lookX(lookX_)
         {}
     };
@@ -101,6 +104,8 @@ namespace ControllerApp {
         //特殊機能
         bool isSp1=0;
         bool isSp2=0;
+        bool isSp3=0;   //+ctrl
+        bool isSp4=0;   //+ctrl
         //非攻撃モーション
         bool isGetup=0;     //起き上がりモーション
         bool isSquat=0;     //しゃがみモーション
@@ -233,8 +238,11 @@ namespace ControllerApp {
             cmd_.isGetup = getButtonState(inData_->button,mapping_.getup);
             cmd_.isSquat = getButtonState(inData_->button,mapping_.squat);
 
-            cmd_.isSp1 = getButtonState(inData_->button,mapping_.sp1);
-            cmd_.isSp2 = getButtonState(inData_->button,mapping_.sp2);
+            cmd_.isSp1 = getButtonState(inData_->button,mapping_.sp1) && !getButtonState(inData_->button,mapping_.ctrl);
+            cmd_.isSp2 = getButtonState(inData_->button,mapping_.sp2) && !getButtonState(inData_->button,mapping_.ctrl);
+            cmd_.isSp3 = getButtonState(inData_->button,mapping_.sp1) && getButtonState(inData_->button,mapping_.ctrl);
+            cmd_.isSp4 = getButtonState(inData_->button,mapping_.sp2) && getButtonState(inData_->button,mapping_.ctrl);
+
         }
     };
 

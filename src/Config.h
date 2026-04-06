@@ -96,6 +96,18 @@ namespace Config {
     int IDEL_FPS = 10;
     float IDLE_SPAC = 50.0;
 
+    const int MotionFPS = 10;
+
+    char leftArmJ1ID = 1;
+    char leftArmJ2ID = 3;
+    char leftArmJ3ID = 4;
+    char leftArmJ4ID = 5;
+
+    char rightArmJ1ID = 2;
+    char rightArmJ2ID = 6;
+    char rightArmJ3ID = 7;
+    char rightArmJ4ID = 8;
+
     ControllerApp::controllerMapping mapping(
         ControllerApp::BTN_L1,          //ATC1
         ControllerApp::BTN_L2,          //ATC2
@@ -107,7 +119,9 @@ namespace Config {
 
         ControllerApp::BTN_UP,          //Getup
         ControllerApp::BTN_DOWN,        //Squat
-        ControllerApp::BTN_TOUCHPAD,    //Taunt
+        ControllerApp::BTN_PS,    //Taunt
+
+        ControllerApp::BTN_TOUCHPAD,
 
         ControllerApp::ANALOG_LX,       //MoveX
         ControllerApp::ANALOG_LY,       //MoveY
