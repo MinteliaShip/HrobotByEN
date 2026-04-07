@@ -69,7 +69,8 @@ enum RobotState {
   SP2,
   SP3,
   SP4,
-  ACT_GETUP
+  ACT_GETUP,
+  TAUNT
 };
 RobotState robotState = IDLE;
 
@@ -248,30 +249,6 @@ void MV_FREE_F(GaitParameters Para = Config::MV_Y_PARAM){
   }
 }
 
-
-//アイドル状態（待機）
-void IDLE_F(){
-  TickType_t lastTimeTicks = xTaskGetTickCount();
-  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
-  leftFoot.setJointSkip(false);
-  rightFoot.setJointSkip(false);
-
-  hipServo.setPos(7500);
-  
-  #ifdef DEBUG
-  Serial.printf("IDLE_F\n");
-  #endif
-  //足曲げ立ち
-  FootController::Pose Pose={
-    420,-Config::IDLE_SPAC,0,
-    0,0,0
-  };
-  leftFoot.setTargetPose(Pose);
-  Pose.Y = +Config::IDLE_SPAC;
-  rightFoot.setTargetPose(Pose);
-  vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-}
-
 //攻撃1
 void ACT_ATTACK1_F(){
   Serial.println("[Demo]");
@@ -303,6 +280,41 @@ void ACT_ATTACK2_F(){
   MotionDemo.endMotion();
 }
 
+void TAUNT_F(){
+  #ifdef DEBUG
+  Serial.printf("TAUNT\n");
+  #endif
+  leftFoot.setJointSkip(false);
+  rightFoot.setJointSkip(false);
+
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::TAUNT_FPS));
+
+  while(1){
+
+    ControllerApp::Commands cmd = OpeCom.getCommands();
+
+    float footAngle = map(cmd.look*100,-100,100,-15,15)*PI/180.0;
+
+    FootController::Pose leftPos={
+      420-50*cmd.triggerL,50*cmd.move.x-Config::TAUNT_SPAC,cmd.move.y*10,
+      footAngle, 0, 0
+    };
+
+    FootController::Pose rightPos={
+      420-50*cmd.triggerL,50*cmd.move.x+Config::TAUNT_SPAC,cmd.move.y*10,
+      -footAngle, 0, 0
+    };
+    
+    leftFoot.setTargetPose(leftPos);
+    rightFoot.setTargetPose(rightPos);
+    
+    if(robotState != TAUNT)break;
+    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+  }
+}
+
+
 void readArm(){
   leftFoot.setJointSkip(false);
   rightFoot.setJointSkip(false);
@@ -327,6 +339,28 @@ void ZERO_F(){
   Serial.println("[zero]");
 }
 
+//アイドル状態（待機）
+void IDLE_F(){
+  TickType_t lastTimeTicks = xTaskGetTickCount();
+  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
+  leftFoot.setJointSkip(false);
+  rightFoot.setJointSkip(false);
+
+  hipServo.setPos(7500);
+  
+  #ifdef DEBUG
+  Serial.printf("IDLE_F\n");
+  #endif
+  //足曲げ立ち
+  FootController::Pose Pose={
+    420,-Config::IDLE_SPAC,0,
+    0,0,0
+  };
+  leftFoot.setTargetPose(Pose);
+  Pose.Y = +Config::IDLE_SPAC;
+  rightFoot.setTargetPose(Pose);
+  vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+}
 
 //無操作時間の記録のため
 int lastRecvTime=0;
@@ -340,31 +374,32 @@ bool stateUpdate(){
     Serial.printf("UnitY:%f UnitX:%f LookX:%f\n robotState:%d\n",cmd.move.y,cmd.move.x, cmd.look,robotState);
     #endif
 
-    if(cmd.isSp1){
-      //SP1
+    if(cmd.isTaunt){//TARNT
+      robotState = TAUNT;
+    }else if(cmd.isSp1){//SP1
       robotState = MV_FREE;
-    }else if(cmd.look > 0.5){
+    }else if(cmd.isSp2){//SP2
+      robotState = SP2;
+    }else if(cmd.isSp3){//SP3
+      robotState = SP3;
+    }else if(cmd.isSp4){//SP4
+      robotState = SP4;
+    }else if(cmd.isAttack1){//ACT1
+      robotState = ACT_ATTACK1;
+    }else if(cmd.isAttack2){//ACT2
+      robotState = ACT_ATTACK2;
+    }else if(cmd.isAttack3){//ACT3
+      robotState = ACT_ATTACK3;
+    }else if(cmd.isAttack4){//ACT4
+      robotState = ACT_ATTACK4;
+    }else if(cmd.isGetup){//get up
+      robotState = ACT_GETUP;
+    }
+
+    //以降はスティック系
+    else if(cmd.look > 0.5){//turn
       //方向変更
       robotState = MV_TURN;
-    }else if(cmd.isSp2){
-      robotState = SP2;
-    }else if(cmd.isSp3){
-      robotState = SP3;
-    }else if(cmd.isAttack1){
-      //攻撃１(零点)
-      robotState = ACT_ATTACK1;
-    }else if(cmd.isAttack2){
-      //攻撃２(自由方向移動)
-      robotState = ACT_ATTACK2;
-    }else if(cmd.isAttack3){
-      //攻撃３
-      robotState = ACT_ATTACK3;
-    }else if(cmd.isAttack4){
-      //攻撃４  
-      robotState = ACT_ATTACK4;
-    }else if(cmd.isGetup){
-      //起き上がり
-      robotState = ACT_GETUP;
     }else if((abs(cmd.move.x)+abs(cmd.move.y)) > 0.1){
       if(abs(cmd.move.x) < abs(cmd.move.y)){
         robotState = MV_X;
@@ -410,6 +445,10 @@ void motorTask(void *pvParameters) {
         MV_FREE_F();
         break;
 
+      case TAUNT:
+        TAUNT_F();
+        break;
+
       case SP3:
         readArm();
         break;
@@ -453,9 +492,9 @@ void setup() {
   xTaskCreateUniversal(
     motorTask,      // 関数名
     "motorTask",    // タスク名
-    4096,           // スタックサイズ
+    8192,           // スタックサイズ
     NULL,           // パラメータ
-    1,              // 優先度
+    configMAX_PRIORITIES - 1,              // 優先度
     NULL,           // タスクハンドル
     1               // 実行するコア (0 or 1)
   );
@@ -465,5 +504,5 @@ void setup() {
 
 void loop() {
   stateUpdate();
-  delay(10);
+  delay(100);
 }

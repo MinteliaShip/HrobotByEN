@@ -108,6 +108,11 @@ namespace Config {
     char rightArmJ3ID = 7;
     char rightArmJ4ID = 8;
 
+    const int TAUNT_FPS = 30;
+    const float TAUNT_SPAC = 50.0;
+
+
+
     ControllerApp::controllerMapping mapping(
         ControllerApp::BTN_L1,          //ATC1
         ControllerApp::BTN_L2,          //ATC2
@@ -119,14 +124,17 @@ namespace Config {
 
         ControllerApp::BTN_UP,          //Getup
         ControllerApp::BTN_DOWN,        //Squat
-        ControllerApp::BTN_PS,    //Taunt
+        ControllerApp::BTN_TRIANGLE,    //Taunt
 
-        ControllerApp::BTN_TOUCHPAD,
+        ControllerApp::BTN_TOUCHPAD,    //Ctrl
 
         ControllerApp::ANALOG_LX,       //MoveX
         ControllerApp::ANALOG_LY,       //MoveY
 
-        ControllerApp::ANALOG_RX        //LookX
+        ControllerApp::ANALOG_RX,        //LookX
+        ControllerApp::ANALOG_RY,        //LookY
+        ControllerApp::ANALOG_L2,        //TriggerL
+        ControllerApp::ANALOG_R2        //TriggerR
     );
 
 

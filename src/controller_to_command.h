@@ -74,6 +74,10 @@ namespace ControllerApp {
         AnalogID moveX;
         AnalogID moveY;
         AnalogID lookX;
+        AnalogID lookY;
+
+        AnalogID triggerL;
+        AnalogID triggerR;
 
         controllerMapping(
             ButtonID attack1_, ButtonID attack2_, ButtonID attack3_, ButtonID attack4_,
@@ -81,7 +85,8 @@ namespace ControllerApp {
             ButtonID getup_, ButtonID squat_,
             ButtonID taunt_,
             ButtonID ctrl_,
-            AnalogID moveX_, AnalogID moveY_, AnalogID lookX_
+            AnalogID moveX_, AnalogID moveY_, AnalogID lookX_, AnalogID lookY_,
+            AnalogID triggerL_, AnalogID triggerR_
         )
         :
         attack1(attack1_), attack2(attack2_), attack3(attack3_), attack4(attack4_),
@@ -89,7 +94,8 @@ namespace ControllerApp {
         getup(getup_), squat(squat_),
         taunt(taunt_),
         ctrl(ctrl_),
-        moveX(moveX_), moveY(moveY_), lookX(lookX_)
+        moveX(moveX_), moveY(moveY_), lookX(lookX_), lookY(lookY_),
+        triggerL(triggerL_), triggerR(triggerR_)
         {}
     };
 
@@ -112,8 +118,9 @@ namespace ControllerApp {
         bool isTaunt=0;     //特殊モーション
 
         Vector2 move = {0.0f, 0.0f};
-
         float look;
+        float triggerL=0;
+        float triggerR=0;
     };
 
 
@@ -220,13 +227,15 @@ namespace ControllerApp {
                 look += deadzone;            
             }
 
-
             float move_x_f = map(move_x,-127+deadzone,127-deadzone,-100,100)*0.01;
             float move_y_f = map(move_y,-127+deadzone,127-deadzone,-100,100)*0.01;
             float look_f = map(look,-127+deadzone,127-deadzone,-100,100)*0.01;
 
             cmd_.move = Vector2(move_x_f,move_y_f);
             cmd_.look = look_f;
+
+            cmd_.triggerL = map(getAnalogValue(inData_->analog,mapping_.triggerL),0,255,0,100)*0.01;
+            cmd_.triggerR = map(getAnalogValue(inData_->analog,mapping_.triggerR),0,255,0,100)*0.01;
 
             cmd_.isAttack1 = getButtonState(inData_->button,mapping_.attack1);
             cmd_.isAttack2 = getButtonState(inData_->button,mapping_.attack2);
