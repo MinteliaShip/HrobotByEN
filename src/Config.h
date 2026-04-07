@@ -94,7 +94,7 @@ namespace Config {
     );
 
     int IDEL_FPS = 10;
-    float IDLE_SPAC = 50.0;
+    float IDLE_SPAC = 80.0;
 
     const int MotionFPS = 10;
 
@@ -108,8 +108,8 @@ namespace Config {
     char rightArmJ3ID = 7;
     char rightArmJ4ID = 8;
 
-    const int TAUNT_FPS = 30;
-    const float TAUNT_SPAC = 50.0;
+    const int TAUNT_FPS = 40;
+    const float TAUNT_SPAC = 80.0;
 
 
 

@@ -74,29 +74,6 @@ enum RobotState {
 };
 RobotState robotState = IDLE;
 
-/*-------------------------------------*/
-//サポート関数
-//時間ずらし
-long phaseShift(long inStep,long phaseShift){
-  long result = 0;
-  if(phaseShift>inStep){
-    result = inStep + phaseShift;
-  }else{
-    result = inStep - phaseShift;
-  }
-  return result;
-}
-
-float phaseShift_f(float inStep,float phaseShift){
-  float result = 0;
-  if(phaseShift>inStep){
-    result = inStep + phaseShift;
-  }else{
-    result = inStep - phaseShift;
-  }
-  return result;
-}
-
 //ボード履歴削除
 void bondReset(){
   // 1. 保存されているデバイスの数を確認
@@ -114,172 +91,6 @@ void bondReset(){
   }
 }
 
-/*-------------------------------------*/
-//動作関数
-//前後方向移動
-void MV_X_F(GaitParameters Para = Config::MV_X_PARAM){
-  #ifdef DEBUG
-  Serial.printf("MV_X_F\n");
-  #endif
-
-  leftFoot.setJointSkip(true);
-  rightFoot.setJointSkip(true);
-
-  TickType_t lastTimeTicks = xTaskGetTickCount();
-  TickType_t beginTimeTicks = lastTimeTicks;
-  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Para.Fps)); 
-  TickType_t actionTimeTicks = pdMS_TO_TICKS(long(Para.T*1000));
-
-  while(lastTimeTicks-beginTimeTicks <= actionTimeTicks){
-    ControllerApp::Commands cmd = OpeCom.getCommands();
-    float t = pdTICKS_TO_MS(lastTimeTicks-beginTimeTicks)*0.001;
-
-    #ifdef DEBUG
-    Serial.printf("MV_X_F:T[%fs]\n",t);
-    #endif
-
-    Vector2 leftPosXY = leftFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,t);
-    float leftKick = leftFoot.tread_kick(-35*PI/180.0,0.1/*Para.T/7.0*/,Para.T,Para.DutyY,t);
-    
-    Vector2 rightPosXY = rightFoot.tread(Para.h,Para.Wd*-cmd.move.y,Para.DutyX,Para.DutyY,Para.T,phaseShift_f(t,Para.T/2.0));
-    float rightKick = rightFoot.tread_kick(-30*PI/180.0,0.1/*Para.T/7.0*/,Para.T,Para.DutyY,phaseShift_f(t,Para.T/2.0));
-
-
-    FootController::Pose leftPos={
-      420-leftPosXY.y,-Para.Spac,leftPosXY.x,
-      0, 0, 0
-    };
-    FootController::Pose rightPos={
-      420-rightPosXY.y,+Para.Spac,rightPosXY.x,
-      0, 0, 0
-    };
-    leftFoot.setTargetPose(leftPos,leftKick);
-    rightFoot.setTargetPose(rightPos,-rightKick);
-
-    if(robotState != MV_X)break;
-    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-  }
-}
-
-//横移動
-void MV_Y_F(GaitParameters Para = Config::MV_Y_PARAM){
-  #ifdef DEBUG
-  Serial.printf("MV_Y_F\n");
-  #endif
-
-  leftFoot.setJointSkip(true);
-  rightFoot.setJointSkip(true);
-
-  TickType_t lastTimeTicks = xTaskGetTickCount();
-  TickType_t beginTimeTicks = lastTimeTicks;
-  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Para.Fps)); 
-  TickType_t actionTimeTicks = pdMS_TO_TICKS(long(Para.T*1000));
-
-  while(lastTimeTicks-beginTimeTicks <= actionTimeTicks){
-    ControllerApp::Commands cmd = OpeCom.getCommands();
-    float t = pdTICKS_TO_MS(lastTimeTicks-beginTimeTicks)*0.001;
-
-    #ifdef DEBUG
-    Serial.printf("MV_Y_F:T[%fs]\n",t);
-    #endif
-
-    Vector2 leftPosXY = leftFoot.tread(Para.h,Para.Wd*-cmd.move.x,Para.DutyX,Para.DutyY,Para.T,t);
-    Vector2 rightPosXY = rightFoot.tread(Para.h,Para.Wd*-cmd.move.x,Para.DutyX,Para.DutyY,Para.T,phaseShift_f(t,Para.T/2.0));
-
-    FootController::Pose leftPos={
-      420-leftPosXY.y,leftPosXY.x-Para.Spac,0,
-      0, 0, 0
-    };
-    FootController::Pose rightPos={
-      420-rightPosXY.y,rightPosXY.x+Para.Spac,0,
-      0, 0, 0
-    };
-    leftFoot.setTargetPose(leftPos);
-    rightFoot.setTargetPose(rightPos);
-
-    if(robotState != MV_Y)break;
-    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-  }
-}
-
-
-//平行移動
-void MV_FREE_F(GaitParameters Para = Config::MV_Y_PARAM){
-  #ifdef DEBUG
-  Serial.printf("MV_FREE_F\n");
-  #endif
-
-  leftFoot.setJointSkip(true);
-  rightFoot.setJointSkip(true);
-
-  TickType_t lastTimeTicks = xTaskGetTickCount();
-  TickType_t beginTimeTicks = lastTimeTicks;
-  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Para.Fps)); 
-  TickType_t actionTimeTicks = pdMS_TO_TICKS(long(Para.T*1000));
-
-  while(lastTimeTicks-beginTimeTicks <= actionTimeTicks){
-    ControllerApp::Commands cmd = OpeCom.getCommands();
-    float t = pdTICKS_TO_MS(lastTimeTicks-beginTimeTicks)*0.001;
-
-    #ifdef DEBUG
-    Serial.printf("MV_FREE_F:T[%fs]\n",t);
-    #endif
-    
-    float footLeftUp = leftFoot.tread_y(Para.h,Para.T,Para.DutyY,t);
-    float Left_x = leftFoot.tread_x(Para.Wd*-cmd.move.x,Para.T,Para.DutyX,t);
-    float Left_z = leftFoot.tread_x(Para.Wd*-cmd.move.y,Para.T,Para.DutyX,t);
-    FootController::Pose leftPos={
-      420-footLeftUp,Left_x-Para.Spac,Left_z,
-      0, 0, 0
-    };
-
-    float footRightUp = rightFoot.tread_y(Para.h,Para.T,Para.DutyY,phaseShift_f(t,Para.T/2.0));
-    float Right_x = rightFoot.tread_x(Para.Wd*-cmd.move.x,Para.T,Para.DutyX,phaseShift_f(t,Para.T/2.0));
-    float Right_z = rightFoot.tread_x(Para.Wd*-cmd.move.y,Para.T,Para.DutyX,phaseShift_f(t,Para.T/2.0));
-    FootController::Pose rightPos={
-      420-footRightUp,Right_x+Para.Spac,Right_z,
-      0, 0, 0
-    };
-    
-    leftFoot.setTargetPose(leftPos);
-    rightFoot.setTargetPose(rightPos);
-    
-    if(robotState != MV_FREE)break;
-    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-  }
-}
-
-//攻撃1
-void ACT_ATTACK1_F(){
-  Serial.println("[Demo]");
-  leftFoot.setJointSkip(true);
-  rightFoot.setJointSkip(true);
-
-  MotionDemo.beginMotion();
-  while(MotionDemo.loopMotion()){
-    TickType_t lastTimeTicks = xTaskGetTickCount();
-    TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::MotionFPS));
-    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-  }
-
-  MotionDemo.endMotion();
-}
-
-void ACT_ATTACK2_F(){
-  Serial.println("[Demo]");
-  leftFoot.setJointSkip(true);
-  rightFoot.setJointSkip(true);
-
-  MotionDemo.beginMotion();
-  TickType_t lastTimeTicks = xTaskGetTickCount();
-  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::MotionFPS));
-  while(MotionDemo.loopMotion()){
-    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-  }
-
-  MotionDemo.endMotion();
-}
-
 void TAUNT_F(){
   #ifdef DEBUG
   Serial.printf("TAUNT\n");
@@ -290,42 +101,47 @@ void TAUNT_F(){
   TickType_t lastTimeTicks = xTaskGetTickCount();
   TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::TAUNT_FPS));
 
-  while(1){
+  // --- 線形処理（なめらか化）用の内部変数 ---
+  float smoothTriggerL = 0;
+  float smoothMoveX = 0;
+  float smoothMoveY = 0;
+  float smoothLook = 0;
 
+  // 追従係数（0.0〜1.0）: 小さいほどなめらか（遅い）、1.0で即値
+  const float K = 0.05; 
+
+  while(1){
     ControllerApp::Commands cmd = OpeCom.getCommands();
 
-    float footAngle = map(cmd.look*100,-100,100,-15,15)*PI/180.0;
+    // --- 線形補間処理 (前回の値 + (今回の入力 - 前回の値) * 係数) ---
+    smoothTriggerL += (cmd.triggerL - smoothTriggerL) * K;
+    smoothMoveX    += (cmd.move.x   - smoothMoveX)    * K;
+    smoothMoveY    += (cmd.move.y   - smoothMoveY)    * K;
+    smoothLook     += (cmd.look     - smoothLook)     * K;
 
-    FootController::Pose leftPos={
-      420-50*cmd.triggerL,50*cmd.move.x-Config::TAUNT_SPAC,cmd.move.y*10,
+    // なめらかになった値を使用して計算
+    float footAngle = map(smoothLook * 100, -100, 100, -15, 15) * PI / 180.0;
+
+    FootController::Pose leftPos = {
+      420 - 50 * smoothTriggerL, 
+      40 * smoothMoveX - Config::TAUNT_SPAC, 
+      smoothMoveY * 10,
       footAngle, 0, 0
     };
 
-    FootController::Pose rightPos={
-      420-50*cmd.triggerL,50*cmd.move.x+Config::TAUNT_SPAC,cmd.move.y*10,
+    FootController::Pose rightPos = {
+      420 - 50 * smoothTriggerL, 
+      40 * smoothMoveX + Config::TAUNT_SPAC, 
+      smoothMoveY * 10,
       -footAngle, 0, 0
     };
     
     leftFoot.setTargetPose(leftPos);
     rightFoot.setTargetPose(rightPos);
     
-    if(robotState != TAUNT)break;
+    if(robotState != TAUNT) break;
     vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
   }
-}
-
-
-void readArm(){
-  leftFoot.setJointSkip(false);
-  rightFoot.setJointSkip(false);
-  Serial.printf("readArm\n");
-  /*
-  for (int i = 0; i < SERVO_NUM; i++) {
-    auto re = arm[i]->setPos(0).getPos();
-    Serial.printf("ID: %d : %d :%s\n",i, re.value, re.error_msg);
-  }
-  */
-  MotionDemo.readMotion(10,500);
 }
 
 //足サーボ零点移動
@@ -356,6 +172,14 @@ void IDLE_F(){
     420,-Config::IDLE_SPAC,0,
     0,0,0
   };
+
+  leftArmJ1.setPos(7500);
+  leftArmJ2.setPosDeg(+45);
+
+  rightArmJ1.setPos(7500);
+  rightArmJ2.setPosDeg(+45);
+
+
   leftFoot.setTargetPose(Pose);
   Pose.Y = +Config::IDLE_SPAC;
   rightFoot.setTargetPose(Pose);
@@ -377,34 +201,34 @@ bool stateUpdate(){
     if(cmd.isTaunt){//TARNT
       robotState = TAUNT;
     }else if(cmd.isSp1){//SP1
-      robotState = MV_FREE;
+      //robotState = MV_FREE;
     }else if(cmd.isSp2){//SP2
-      robotState = SP2;
+      //robotState = SP2;
     }else if(cmd.isSp3){//SP3
-      robotState = SP3;
+      //robotState = SP3;
     }else if(cmd.isSp4){//SP4
-      robotState = SP4;
+      //robotState = SP4;
     }else if(cmd.isAttack1){//ACT1
-      robotState = ACT_ATTACK1;
+      //robotState = ACT_ATTACK1;
     }else if(cmd.isAttack2){//ACT2
-      robotState = ACT_ATTACK2;
+      //robotState = ACT_ATTACK2;
     }else if(cmd.isAttack3){//ACT3
-      robotState = ACT_ATTACK3;
+      //robotState = ACT_ATTACK3;
     }else if(cmd.isAttack4){//ACT4
-      robotState = ACT_ATTACK4;
+      //robotState = ACT_ATTACK4;
     }else if(cmd.isGetup){//get up
-      robotState = ACT_GETUP;
+      //robotState = ACT_GETUP;
     }
 
     //以降はスティック系
     else if(cmd.look > 0.5){//turn
       //方向変更
-      robotState = MV_TURN;
+      //robotState = MV_TURN;
     }else if((abs(cmd.move.x)+abs(cmd.move.y)) > 0.1){
       if(abs(cmd.move.x) < abs(cmd.move.y)){
-        robotState = MV_X;
+        //robotState = MV_X;
       }else{
-        robotState = MV_Y;
+        //robotState = MV_Y;
       }
     }else{
       //IDLE
@@ -434,15 +258,15 @@ void motorTask(void *pvParameters) {
   while(1){
     switch (robotState) {
       case MV_X:
-        MV_X_F();
+        //MV_X_F();
         break;
       
       case MV_Y:
-        MV_Y_F();
+        //MV_Y_F();
         break;
 
       case MV_FREE:
-        MV_FREE_F();
+        //MV_FREE_F();
         break;
 
       case TAUNT:
@@ -450,7 +274,7 @@ void motorTask(void *pvParameters) {
         break;
 
       case SP3:
-        readArm();
+        //readArm();
         break;
 
       case SP2:
@@ -458,7 +282,7 @@ void motorTask(void *pvParameters) {
         break;
       
       case ACT_ATTACK1:
-        ACT_ATTACK1_F();
+        //ACT_ATTACK1_F();
         break;
 
       case IDLE:
