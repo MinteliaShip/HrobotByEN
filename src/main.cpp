@@ -107,33 +107,51 @@ void TAUNT_F(){
   float smoothMoveY = 0;
   float smoothLook = 0;
 
+  float smootArmLeftJ2 = 0;
+  float smootArmRightJ2 = 0;
+
+  leftArmJ1.setPos(7500);
+  leftArmJ2.setPosDeg(+45);
+  leftArmJ3.setPosDeg(0);
+  leftArmJ4.setPosDeg(-90);
+
+  rightArmJ1.setPos(7500);
+  rightArmJ2.setPosDeg(+45);
+  rightArmJ3.setPosDeg(0);
+  rightArmJ4.setPosDeg(-90);
+
+
   // 追従係数（0.0〜1.0）: 小さいほどなめらか（遅い）、1.0で即値
-  const float K = 0.05; 
+  const float K = 0.05;
+  const float hipK = 0.07;
+  const float yK = 0.2; 
 
   while(1){
     ControllerApp::Commands cmd = OpeCom.getCommands();
 
     // --- 線形補間処理 (前回の値 + (今回の入力 - 前回の値) * 係数) ---
-    smoothTriggerL += (cmd.triggerL - smoothTriggerL) * K;
+    smoothTriggerL += (cmd.triggerL - smoothTriggerL) * yK;
     smoothMoveX    += (cmd.move.x   - smoothMoveX)    * K;
     smoothMoveY    += (cmd.move.y   - smoothMoveY)    * K;
-    smoothLook     += (cmd.look     - smoothLook)     * K;
-
+    smoothLook     += (cmd.look     - smoothLook)     * hipK;
+    
     // なめらかになった値を使用して計算
-    float footAngle = map(smoothLook * 100, -100, 100, -15, 15) * PI / 180.0;
+    float hipAngle = map(smoothLook * 100, -100, 100, -60, 60) * PI / 180.0;
+
+    hipServo.setPosRad(hipAngle);
 
     FootController::Pose leftPos = {
-      420 - 50 * smoothTriggerL, 
-      40 * smoothMoveX - Config::TAUNT_SPAC, 
-      smoothMoveY * 10,
-      footAngle, 0, 0
+      400 - 50 * smoothTriggerL+7, 
+      -40 * smoothMoveX - Config::TAUNT_SPAC, 
+      -smoothMoveY * 20,
+      0, 0, 0
     };
 
     FootController::Pose rightPos = {
-      420 - 50 * smoothTriggerL, 
-      40 * smoothMoveX + Config::TAUNT_SPAC, 
-      smoothMoveY * 10,
-      -footAngle, 0, 0
+      400 - 50 * smoothTriggerL, 
+      -40 * smoothMoveX + Config::TAUNT_SPAC, 
+      -smoothMoveY * 20,
+      0, 0, 0
     };
     
     leftFoot.setTargetPose(leftPos);
@@ -161,8 +179,6 @@ void IDLE_F(){
   TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::IDEL_FPS)); 
   leftFoot.setJointSkip(false);
   rightFoot.setJointSkip(false);
-
-  hipServo.setPos(7500);
   
   #ifdef DEBUG
   Serial.printf("IDLE_F\n");
@@ -172,12 +188,6 @@ void IDLE_F(){
     420,-Config::IDLE_SPAC,0,
     0,0,0
   };
-
-  leftArmJ1.setPos(7500);
-  leftArmJ2.setPosDeg(+45);
-
-  rightArmJ1.setPos(7500);
-  rightArmJ2.setPosDeg(+45);
 
 
   leftFoot.setTargetPose(Pose);
@@ -232,7 +242,7 @@ bool stateUpdate(){
       }
     }else{
       //IDLE
-      robotState = IDLE;
+      robotState = TAUNT;
     }
 
     lastRecvTime = millis();
@@ -286,7 +296,7 @@ void motorTask(void *pvParameters) {
         break;
 
       case IDLE:
-        IDLE_F();
+        //IDLE_F();
         break;
     }
     delay(1);
