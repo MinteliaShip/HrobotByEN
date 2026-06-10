@@ -91,75 +91,32 @@ void bondReset(){
   }
 }
 
-void TAUNT_F(){
-  #ifdef DEBUG
-  Serial.printf("TAUNT\n");
-  #endif
-  leftFoot.setJointSkip(false);
-  rightFoot.setJointSkip(false);
+void ACT_ATTACK1_F(){
+  Serial.printf("腕薙ぎ払いモーション!\n");
+  delay(2000);
+  Serial.printf("[end]\n");
+}
 
-  TickType_t lastTimeTicks = xTaskGetTickCount();
-  TickType_t cycleTimeTicks = pdMS_TO_TICKS(long(1000.0 / Config::TAUNT_FPS));
 
-  // --- 線形処理（なめらか化）用の内部変数 ---
-  float smoothTriggerL = 0;
-  float smoothMoveX = 0;
-  float smoothMoveY = 0;
-  float smoothLook = 0;
+void ACT_ATTACK3_F(){
+  Serial.printf("パンチモーション!\n");
+  delay(2000);
+  Serial.printf("[end]\n");
+}
 
-  float smootArmLeftJ2 = 0;
-  float smootArmRightJ2 = 0;
-
-  leftArmJ1.setPos(7500);
-  leftArmJ2.setPosDeg(+45);
+void ArmIni(){
+  //初期位置
+  leftArmJ1.setPosDeg(0);
+  leftArmJ2.setPosDeg(+70);
   leftArmJ3.setPosDeg(0);
-  leftArmJ4.setPosDeg(-90);
+  leftArmJ4.setPosDeg(0);//-方向が手前。↓も同じ
 
-  rightArmJ1.setPos(7500);
-  rightArmJ2.setPosDeg(+45);
+  rightArmJ1.setPosDeg(0);
+  rightArmJ2.setPosDeg(+70);
   rightArmJ3.setPosDeg(0);
-  rightArmJ4.setPosDeg(-90);
+  rightArmJ4.setPosDeg(0);
 
-
-  // 追従係数（0.0〜1.0）: 小さいほどなめらか（遅い）、1.0で即値
-  const float K = 0.05;
-  const float hipK = 0.07;
-  const float yK = 0.2; 
-
-  while(1){
-    ControllerApp::Commands cmd = OpeCom.getCommands();
-
-    // --- 線形補間処理 (前回の値 + (今回の入力 - 前回の値) * 係数) ---
-    smoothTriggerL += (cmd.triggerL - smoothTriggerL) * yK;
-    smoothMoveX    += (cmd.move.x   - smoothMoveX)    * K;
-    smoothMoveY    += (cmd.move.y   - smoothMoveY)    * K;
-    smoothLook     += (cmd.look     - smoothLook)     * hipK;
-    
-    // なめらかになった値を使用して計算
-    float hipAngle = map(smoothLook * 100, -100, 100, -60, 60) * PI / 180.0;
-
-    hipServo.setPosRad(hipAngle);
-
-    FootController::Pose leftPos = {
-      400 - 50 * smoothTriggerL+7, 
-      -40 * smoothMoveX - Config::TAUNT_SPAC, 
-      -smoothMoveY * 20,
-      0, 0, 0
-    };
-
-    FootController::Pose rightPos = {
-      400 - 50 * smoothTriggerL, 
-      -40 * smoothMoveX + Config::TAUNT_SPAC, 
-      -smoothMoveY * 20,
-      0, 0, 0
-    };
-    
-    leftFoot.setTargetPose(leftPos);
-    rightFoot.setTargetPose(rightPos);
-    
-    if(robotState != TAUNT) break;
-    vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
-  }
+  hipServo.setMSMaxDeg(0);
 }
 
 //足サーボ零点移動
@@ -184,16 +141,23 @@ void IDLE_F(){
   Serial.printf("IDLE_F\n");
   #endif
   //足曲げ立ち
-  FootController::Pose Pose={
+  FootController::Pose Pose={//420
     420,-Config::IDLE_SPAC,0,
     0,0,0
   };
 
+  ArmIni();//初期位置
 
   leftFoot.setTargetPose(Pose);
   Pose.Y = +Config::IDLE_SPAC;
   rightFoot.setTargetPose(Pose);
   vTaskDelayUntil(&lastTimeTicks, cycleTimeTicks);
+
+  //100以上になったら、通信をやめる。
+  static int count = 0;
+  if(count > 100)while(1){}
+  count++;
+
 }
 
 //無操作時間の記録のため
@@ -219,11 +183,11 @@ bool stateUpdate(){
     }else if(cmd.isSp4){//SP4
       //robotState = SP4;
     }else if(cmd.isAttack1){//ACT1
-      //robotState = ACT_ATTACK1;
+      robotState = ACT_ATTACK1;
     }else if(cmd.isAttack2){//ACT2
       //robotState = ACT_ATTACK2;
     }else if(cmd.isAttack3){//ACT3
-      //robotState = ACT_ATTACK3;
+      robotState = ACT_ATTACK3;
     }else if(cmd.isAttack4){//ACT4
       //robotState = ACT_ATTACK4;
     }else if(cmd.isGetup){//get up
@@ -280,7 +244,7 @@ void motorTask(void *pvParameters) {
         break;
 
       case TAUNT:
-        TAUNT_F();
+        //TAUNT_F();
         break;
 
       case SP3:
@@ -288,15 +252,23 @@ void motorTask(void *pvParameters) {
         break;
 
       case SP2:
-        ZERO_F();
+        //ZERO_F();
         break;
       
       case ACT_ATTACK1:
-        //ACT_ATTACK1_F();
+        ACT_ATTACK1_F();
+        break;
+
+      case ACT_ATTACK2:
+        //ACT_ATTACK2_F();
+        break;
+
+      case ACT_ATTACK3:
+        ACT_ATTACK3_F();
         break;
 
       case IDLE:
-        //IDLE_F();
+        IDLE_F();
         break;
     }
     delay(1);
@@ -309,6 +281,9 @@ void motorTask(void *pvParameters) {
 //準備関数（setup）
 servoICS::Servo servoDEMOS(Config::ServoSerial,Config::enPin,5);
 void setup() {
+
+  delay(1000);
+
   Serial.begin(Config::bpsPC);
   if(Config::ServoSerial != &Serial)Config::ServoSerial->begin(Config::bpsServo,SERIAL_8E1,Config::rxPin,Config::txPin);
   //SERIAL_8E1がICS規格で使用されている。
@@ -320,8 +295,6 @@ void setup() {
   leftFoot.setOffset(7726,7466,7378,7429,7576);
   rightFoot.setOffset(7620,7509,7452,7168,7638);
   #endif
-
-  
 
   xTaskCreateUniversal(
     motorTask,      // 関数名

@@ -94,7 +94,7 @@ namespace Config {
     );
 
     int IDEL_FPS = 10;
-    float IDLE_SPAC = 80.0;
+    float IDLE_SPAC = 50.0;//80
 
     const int MotionFPS = 10;
 
