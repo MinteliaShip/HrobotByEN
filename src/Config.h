@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include "FootController.h"
-#include "controller_to_command.h"
 
 
 
@@ -82,7 +81,6 @@ namespace Config {
     20.0    //Spac
     );
 
-
     GaitParameters MV_Y_PARAM(
     0.7,    //T
     40,     //h
@@ -98,6 +96,18 @@ namespace Config {
 
     const int MotionFPS = 10;
 
+    char leftFootJ1ID = 10;
+    char leftFootJ2ID = 16;
+    char leftFootJ3ID = 17;
+    char leftFootJ4ID = 18;
+    char leftFootJ5ID = 19;
+
+    char rightFootJ1ID = 9;
+    char rightFootJ2ID = 12;
+    char rightFootJ3ID = 13;
+    char rightFootJ4ID = 14;
+    char rightFootJ5ID = 15;
+
     char leftArmJ1ID = 1;
     char leftArmJ2ID = 3;
     char leftArmJ3ID = 4;
@@ -110,33 +120,6 @@ namespace Config {
 
     const int TAUNT_FPS = 30;
     const float TAUNT_SPAC = 50.0;
-
-
-
-    ControllerApp::controllerMapping mapping(
-        ControllerApp::BTN_L1,          //ATC1
-        ControllerApp::BTN_L2,          //ATC2
-        ControllerApp::BTN_R1,          //ATC3
-        ControllerApp::BTN_R2,          //ATC4
-
-        ControllerApp::BTN_SHARE,       //SP1
-        ControllerApp::BTN_OPTIONS,     //SP2
-
-        ControllerApp::BTN_UP,          //Getup
-        ControllerApp::BTN_DOWN,        //Squat
-        ControllerApp::BTN_TRIANGLE,    //Taunt
-
-        ControllerApp::BTN_TOUCHPAD,    //Ctrl
-
-        ControllerApp::ANALOG_LX,       //MoveX
-        ControllerApp::ANALOG_LY,       //MoveY
-
-        ControllerApp::ANALOG_RX,        //LookX
-        ControllerApp::ANALOG_RY,        //LookY
-        ControllerApp::ANALOG_L2,        //TriggerL
-        ControllerApp::ANALOG_R2        //TriggerR
-    );
-
 
 }
 
