@@ -8,73 +8,93 @@
 #include "frameData.h"
 
 
-/**********************************************/
-//基本設定
-int serialPC_bps = 115200;
-int serialServo_bps = 115200;
-int txPin = 0;
-int rxPin = 0;
-int enPin = 0;
 
-/**********************************************/
+/*　*/
+//デバッグ用関数　コマンド
+//毎ループ推奨
+//コマンド内容
+//・task　：タスク関連
+//オプション
+//task      ：実行中タスクを表示
+//task -s   ：次回タスクの設定
+//task -s -n：緊急ですぐに実行するタスクを設定
 
-/*宣言・初期化・定数*/
-FootController leftFoot(Config::leftfootConfig,Config::lengs8);
-FootController rightFoot(Config::rightfootConfig,Config::lengs8);
-servoICS::Servo hipServo(&Serial1,enPin,Config::hipServoID);
 
-servoICS::Servo leftFoot1(&Serial1,enPin,Config::leftFootJ1ID);
+//(検討)
 
-servoICS::Servo leftArmJ1(&Serial1,enPin,Config::leftArmJ1ID);
-servoICS::Servo leftArmJ2(&Serial1,enPin,Config::leftArmJ2ID);
-servoICS::Servo leftArmJ3(&Serial1,enPin,Config::leftArmJ3ID);
-servoICS::Servo leftArmJ4(&Serial1,enPin,Config::leftArmJ4ID);
-
-servoICS::Servo rightArmJ1(&Serial1,enPin,Config::rightArmJ1ID);
-servoICS::Servo rightArmJ2(&Serial1,enPin,Config::rightArmJ2ID);
-servoICS::Servo rightArmJ3(&Serial1,enPin,Config::rightArmJ3ID);
-servoICS::Servo rightArmJ4(&Serial1,enPin,Config::rightArmJ4ID);
-
-/**/
-
-void taskManager(bool canDelegateTask){//タスク管理。
+/*  */
+//using NextTaskType = void (*)();
+//引数  ：canDelegateTask＝通常タスクの判定をスキップする。しかし、緊急タスクの判定はある。
+//返り値：次に実行すべきタスクを帰す。
+//
+//移行許可ありで判定なし（操作なしや緊急動作なし）の場合、なにもしないnopを帰す。   
+//移行許可なしで判定なしの場合は、nullptrを帰す。
+NextTaskType taskManager(bool canDelegateTask){//タスク管理。
 
     //次に実行するタスクを選択する。
-    void (*task)()=nullptr;
+    NextTaskType nextTask_ = nullptr;
 
+    //以下に判定内容と関数ポインタの指定。
     do{
         if(canDelegateTask){//処理移行の許可アリ
-        task = motion::posture::nop;//なにもない場合は、nopになる。
+            nextTask_ = motion::posture::nop;//なにもない場合は、nopになる。
 
-        //歩行モーション
-        /*************************/
-        int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,-127,128,20,-10,10);
-        if(stick_lx > 0){
-            task = motion::walk::walk1;
+            //歩行モーション
+            /*************************/
+            int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,-127,128,20,-10,10);
+            if(stick_lx > 0){
+                nextTask_ = motion::walk::walk1;
+                break;
+            }
+
+            /*************************/
+            //姿勢モーション
+
+            //合わせボタン実行
+            if(Dualshock4.data.button.r3){
+                if(Dualshock4.data.button.r1){
+                    nextTask_ = motion::posture::battle::attack_Heavy_2;
+                    break;
+                }
+            }
+
+            //単体ボタン実行
+            if(Dualshock4.data.button.r2){
+                nextTask_ = motion::posture::battle::attack_Light_1;
+                break;
+            }
+
+            if(Dualshock4.data.button.l2){
+                nextTask_ = motion::posture::battle::attack_Light_2;
+                break;
+            }
+
+            if(Dualshock4.data.button.r1){
+                nextTask_ = motion::posture::battle::attack_Medium_1;
+                break;
+            }
+
+            if(Dualshock4.data.button.l1){
+                nextTask_ = motion::posture::battle::attack_Medium_2;
+                break;
+            }
+        }
+
+        if(Dualshock4.data.button.ps){
+            nextTask_ = motion::posture::DebugMode;
+            while(Dualshock4.data.button.ps==0);
             break;
         }
-        /*************************/
-        //姿勢モーション
-        if(Dualshock4.data.button.r2){
-            task = motion::posture::battle::attack1;
-            break;
-        }
 
-        }else{//処理移行の許可ナシ 至急実行用
-        //起き上がりモーション
-
-        }
+        
     }while(false);
 
-    //タスク実行
-    if(task!=nullptr) task();
+    //タスクを返す。
+    return nextTask_;
 
 }
 
 
-/*-------------------------------------*/
-//準備関数（setup）
-servoICS::Servo servoDEMOS(&Serial1,enPin,5);
 void setup() {
   Serial.begin(serialPC_bps);
   Serial1.begin(serialServo_bps,SERIAL_8E1,rxPin,txPin);
@@ -82,14 +102,26 @@ void setup() {
   Dualshock4.begin(Config::ControllerMac);
   bondReset();
 
+  LittleFS_ini();//初期化
+  listFiles();//保存データを一覧表示
+  
+
   #ifndef SIMULATION
   leftFoot.setOffset(7726,7466,7378,7429,7576);
   rightFoot.setOffset(7620,7509,7452,7168,7638);
   #endif
 
+    while(Dualshock4.isConnected()==0){
+        delay(1000);
+        Serial.println("Connect...");
+    }
+    Serial.println("Connected");
+
+    nextTask = taskManager(1);
 }
 
 
 void loop() {
-  taskManager(1);//移行許可を与えて。
+    NextTaskType runTask = nextTask;
+    runTask();
 }

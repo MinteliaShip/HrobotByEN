@@ -3,7 +3,14 @@
 
 #include <Arduino.h>
 #include "FootController.h"
-
+/**********************************************/
+//基本設定
+extern int serialPC_bps;
+extern int serialServo_bps;
+extern int txPin;
+extern int rxPin;
+extern int enPin;
+/**********************************************/
 
 
 struct GaitParameters {
@@ -20,106 +27,63 @@ struct GaitParameters {
 
 namespace Config {
     //コントローラのMACアドレス
-    const char ControllerMac[18] = "06:02:01:02:05:10";
+    extern const char ControllerMac[18];
 
     //PCとの通信のボートレート
-    const long bpsPC = 115200;
+    extern const long bpsPC;
 
     //サーボとの通信設定
-    #ifdef SIMULATION
-    HardwareSerial* ServoSerial = &Serial;
-    #else
-    HardwareSerial* ServoSerial = &Serial1;
-    #endif
-    const char enPin = 23;
-    const char txPin = 19;
-    const char rxPin = 22;
-    const long bpsServo = 115200;
+    extern HardwareSerial* ServoSerial;
 
-    const char hipServoID = 11;
+    extern const char enPin;
+    extern const char txPin;
+    extern const char rxPin;
+    extern const long bpsServo;
+
+    extern const char hipServoID;
 
     //足寸法
-    FootController::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
-    FootController::IcsServoConfig rightfootConfig{
-    9,
-    12,
-    13,
-    14,
-    15,
-    enPin,
-    ServoSerial
-    };
+    extern FootController::leng8 lengs8;
+    extern FootController::IcsServoConfig rightfootConfig;
 
-    FootController::IcsServoConfig leftfootConfig{
-    10,
-    16,
-    17,
-    18,
-    19,
-    enPin,
-    ServoSerial
-    };
+    extern FootController::IcsServoConfig leftfootConfig;
 
     //歩行軌道のパラメータ
-    GaitParameters MV_X_PARAM(
-    0.7,    //T
-    40,     //h
-    120,    //Wd
-    0.8,    //DutyX
-    0.8,     //DutyY
-    40,     //Fps
-    50.0    //Spac
-    );
+    extern GaitParameters MV_X_PARAM;
 
-    GaitParameters MV_FREE_PARAM(
-    1.0,    //T
-    60,     //h
-    100,    //Wd
-    0.6,    //DutyX
-    0.65,     //DutyY
-    30,     //Fps
-    20.0    //Spac
-    );
+    extern GaitParameters MV_FREE_PARAM;
 
-    GaitParameters MV_Y_PARAM(
-    0.7,    //T
-    40,     //h
-    120,    //Wd
-    0.8,    //DutyX
-    0.8,     //DutyY
-    40,     //Fps
-    50.0    //Spac
-    );
+    extern GaitParameters MV_Y_PARAM;
 
-    int IDEL_FPS = 10;
-    float IDLE_SPAC = 50.0;
+    extern int IDEL_FPS;
+    extern float IDLE_SPAC;
 
-    const int MotionFPS = 10;
+    extern const int MotionFPS;
 
-    char leftFootJ1ID = 10;
-    char leftFootJ2ID = 16;
-    char leftFootJ3ID = 17;
-    char leftFootJ4ID = 18;
-    char leftFootJ5ID = 19;
+    extern char leftFootJ1ID;
+    extern char leftFootJ2ID;
+    extern char leftFootJ3ID;
+    extern char leftFootJ4ID;
+    extern char leftFootJ5ID;
 
-    char rightFootJ1ID = 9;
-    char rightFootJ2ID = 12;
-    char rightFootJ3ID = 13;
-    char rightFootJ4ID = 14;
-    char rightFootJ5ID = 15;
+    extern char rightFootJ1ID;
+    extern char rightFootJ2ID;
+    extern char rightFootJ3ID;
+    extern char rightFootJ4ID;
+    extern char rightFootJ5ID;
 
-    char leftArmJ1ID = 1;
-    char leftArmJ2ID = 3;
-    char leftArmJ3ID = 4;
-    char leftArmJ4ID = 5;
+    extern char leftArmJ1ID;
+    extern char leftArmJ2ID;
+    extern char leftArmJ3ID;
+    extern char leftArmJ4ID;
 
-    char rightArmJ1ID = 2;
-    char rightArmJ2ID = 6;
-    char rightArmJ3ID = 7;
-    char rightArmJ4ID = 8;
+    extern char rightArmJ1ID;
+    extern char rightArmJ2ID;
+    extern char rightArmJ3ID;
+    extern char rightArmJ4ID;
 
-    const int TAUNT_FPS = 30;
-    const float TAUNT_SPAC = 50.0;
+    extern const int TAUNT_FPS;
+    extern const float TAUNT_SPAC;
 
 }
 

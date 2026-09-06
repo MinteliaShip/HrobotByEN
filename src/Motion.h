@@ -11,12 +11,17 @@ namespace motion{//モーション関数の置き場所
 
     namespace posture{
         namespace battle{
-        void attack1();
-        void attack2();
+            void attack_Light_1();
+            void attack_Light_2();
+            void attack_Medium_1();
+            void attack_Medium_2();
+            void attack_Heavy_1();
+            void attack_Heavy_2();
         }
 
         void taunt();
         void nop();
+        void DebugMode();
     }
 }
 

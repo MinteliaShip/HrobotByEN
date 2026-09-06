@@ -7,19 +7,274 @@ void motion::walk::walk1(){
 
     for(int i = 0;i < 90;i++){
         Serial.printf("c:%d\n",i);
-        taskManager(0);//移行許可は出さない。
+        nextTask = taskManager(0);//移行許可は出さない。
     }
+    nextTask = taskManager(1);
     return;//処理終わり
 }
 
-void motion::posture::battle::attack1(){
+
+// 1次元の目標角度を計算する関数（全ステップ管理版）
+float calculateStepMotion(float start_angle, float target_angle, int current_step, int total_steps) {
+    if (current_step >= total_steps) {
+        return target_angle; // 終了
+    }
+
+    // 進行割合 (0.0 ～ 1.0)
+    float t = (float)current_step / (float)total_steps;
+
+    // 3次エルミート曲線（Smoothstep）による加減速
+    // スタートとゴールで速度が 0（滑らかに発進・停止）になる
+    float smooth_t = t * t * (3.0f - 2.0f * t);
+
+    // 現在のステップにおける目標角度を返す
+    return start_angle + (target_angle - start_angle) * smooth_t;
 }
 
-void motion::posture::battle::attack2(){
+
+void motion::posture::battle::attack_Light_1(){//弱攻撃
+    Serial.printf("attack_Light_1!\n");
+    float armAngle_zero[4]={0,70,33,-130};//rightArmJ1~rightArmJ4 ServoArray[6]~ServoArray[9]
+    float armAngle_tar[4]={-14,73,-55.8,-43.6};//rightArmJ1~rightArmJ4 ServoArray[6]~ServoArray[9]
+
+    int currentStep=0;
+    int totalSteps=15;
+    float currentPos[4];
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_zero[i], armAngle_tar[i], currentStep, totalSteps);
+            ServoArray[i+6]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(1);
+    }
+
+    delay(10);
+
+    currentStep=0;
+    totalSteps=25;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar[i], armAngle_zero[i], currentStep, totalSteps);
+            ServoArray[i+6]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(20);
+    }
+    nextTask = taskManager(1);
 }
+
+void motion::posture::battle::attack_Light_2(){
+    Serial.printf("attack_Light_2!\n");
+    float armAngle_zero[4]={4,80,-16,-130};//leftArmJ1~leftArmJ4 ServoArray[2]~ServoArray[5]
+    float armAngle_tar[4]={5,43,75,-14};//leftArmJ1~leftArmJ4 ServoArray[2]~ServoArray[5]
+
+    int currentStep=0;
+    int totalSteps=20;
+    float currentPos[4];
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_zero[i], armAngle_tar[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(5);
+    }
+
+    delay(100);
+
+    currentStep=0;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar[i], armAngle_zero[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(10);
+    }
+    nextTask = taskManager(1);
+}
+
+void motion::posture::battle::attack_Medium_1(){//中攻撃
+    Serial.printf("attack2!\n");
+    float armAngle_zero[4]={4,80,-16,-130};//leftArmJ1~leftArmJ4 ServoArray[2]~ServoArray[5]
+    float armAngle_tar1[4]={-13,41,-26,-71};//leftArmJ1~leftArmJ4 ServoArray[2]~ServoArray[5]
+    float armAngle_tar2[4]={50,50,76,-18};//leftArmJ1~leftArmJ4 ServoArray[2]~ServoArray[5]
+
+    int currentStep=0;
+    int totalSteps=20;
+    float currentPos[4];
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_zero[i], armAngle_tar1[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(5);
+    }
+
+    currentStep=0;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar1[i], armAngle_tar2[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(1);
+    }
+
+    delay(10);
+
+    currentStep=0;
+    totalSteps=50;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar2[i], armAngle_zero[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(15);
+    }
+    nextTask = taskManager(1);
+}
+
+void motion::posture::battle::attack_Medium_2(){
+    Serial.printf("attack_Medium_2!\n");
+    float armAngle_zero[4]={0,70,33,-130};//ServoArray[6]~ServoArray[9]
+    float armAngle_tar1[4]={-2.8,90.7,-7.8,-113.9};
+    float armAngle_tar2[4]={-19,87,3.4,-100};
+
+    int currentStep=0;
+    int totalSteps=20;
+    float currentPos[4];
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_zero[i], armAngle_tar1[i], currentStep, totalSteps);
+            ServoArray[i+6]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(5);
+    }
+
+    currentStep=0;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar1[i], armAngle_tar2[i], currentStep, totalSteps);
+            ServoArray[i+6]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(1);
+    }
+
+    delay(10);
+
+    currentStep=0;
+    totalSteps=50;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<4;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar2[i], armAngle_zero[i], currentStep, totalSteps);
+            ServoArray[i+6]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(15);
+    }
+    nextTask = taskManager(1);
+}
+
+
+void motion::posture::battle::attack_Heavy_1(){
+    nextTask = taskManager(1);
+}
+
+void motion::posture::battle::attack_Heavy_2(){
+    Serial.printf("attack_Heavy_2!\n");
+    float armAngle_zero[8]={4,80,-16,-130,0,70,33,-130};//ServoArray[2]~ServoArray[9]
+    float armAngle_tar1[8]={75,69,4,-100,0,24,-166,-70};
+    float armAngle_tar2[8]={-9,94,24,-70,22,31,-72,-43};
+
+    int currentStep=0;
+    int totalSteps=20;
+    float currentPos[8];
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<8;i++){
+            currentPos[i] = calculateStepMotion(armAngle_zero[i], armAngle_tar1[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(5);
+    }
+
+    currentStep=0;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<8;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar1[i], armAngle_tar2[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(1);
+    }
+
+    delay(10);
+
+    currentStep=0;
+    totalSteps=50;
+
+    while (currentStep <= totalSteps) {
+        for(int i=0;i<8;i++){
+            currentPos[i] = calculateStepMotion(armAngle_tar2[i], armAngle_zero[i], currentStep, totalSteps);
+            ServoArray[i+2]->setPosDeg(currentPos[i]);
+        }
+        currentStep++;
+        delay(10);
+    }
+    nextTask = taskManager(1);
+}
+
+
+
 
 void motion::posture::nop(){
     Serial.printf("nop!\n");
+    nextTask = taskManager(1);
     delay(10);
 }
 
+void motion::posture::DebugMode(){
+    Serial.printf("DebugMode! comand!\n");
+    nextTask = taskManager(0);
+    
+    while(nextTask == nullptr){
+        for(int i = 0;i < 10;i++){
+            auto returnData = ServoArray[i]->setPosIcs(0).getPosDeg();
+            Serial.printf("[%s]:%f (%s)\n",ServoArray_name[i],returnData.value,returnData.error_msg);
+        }
+        Serial.print("{");
+        for(int i = 0;i < 10;i++){
+            auto returnData = ServoArray[i]->setPosIcs(0).getPosDeg();
+            if(i!=0)Serial.print(",");
+            Serial.print(returnData.value);
+        }
+        Serial.println("}");
+
+        delay(1500);
+        Serial.println("---");
+
+        if(Dualshock4.data.button.cross == 0){
+            nextTask = taskManager(0);
+        }else{
+            nextTask = taskManager(1);
+        }
+    }
+}
