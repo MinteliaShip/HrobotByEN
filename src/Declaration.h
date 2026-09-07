@@ -31,7 +31,7 @@ extern servoICS::Servo rightArmJ2;
 extern servoICS::Servo rightArmJ3;
 extern servoICS::Servo rightArmJ4;
 
-extern servoICS::Servo* ServoArray[10];
-extern const char* ServoArray_name[10];
+extern servoICS::Servo* ServoArray[19];
+extern const char* ServoArray_name[19];
 
 #endif

@@ -78,6 +78,11 @@ NextTaskType taskManager(bool canDelegateTask){//タスク管理。
                 nextTask_ = motion::posture::battle::attack_Medium_2;
                 break;
             }
+
+            if(Dualshock4.data.button.options){
+                nextTask_ = motion::posture::taunt;
+                break;
+            }
         }
 
         if(Dualshock4.data.button.ps){
