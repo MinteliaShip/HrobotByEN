@@ -5,6 +5,8 @@ void motion::walk::walk1(){
     FrameLimiter framelim;
     framelim.setInterval(int(1000/30));//30fps設定
 
+
+
     for(int i = 0;i < 90;i++){
         Serial.printf("c:%d\n",i);
         nextTask = taskManager(0);//移行許可は出さない。
@@ -34,35 +36,10 @@ float calculateStepMotion(float start_angle, float target_angle, int current_ste
 
 void motion::posture::taunt(){//弱攻撃
     Serial.printf("taunt 立ち姿勢!\n");
-    float armAngle_zero[19]={31.35,-8.57,-68.71,162.81,-104.73,-9.42,72.73,22.61,-65.71,-15.79,-4.83,36.72,-18.87,0.00,29.46,-6.48,26.26,23.73,7.56};//hip~ ServoArray[0]~ServoArray[18]
-    float armAngle_tar[19]={18.80,3.71,-64.46,165.78,-28.38,-36.52,46.07,-18.70,-41.34,-21.13,-11.88,13.20,-26.29,-6.85,31.08,5.80,19.85,4.93,-3.07};
+    float armAngle_zero[8]={0,0,0,0,0,0,0,0};//ServoArray[1]~ServoArray[8]
 
-    int currentStep=0;
-    int totalSteps=800;
-    const int motor_NUM=19;
-    float currentPos[motor_NUM];
-
-    while (currentStep <= totalSteps) {
-        for(int i=0;i<motor_NUM;i++){
-            currentPos[i] = calculateStepMotion(armAngle_zero[i], armAngle_tar[i], currentStep, totalSteps);
-            ServoArray[i+0]->setPosDeg(currentPos[i]);
-        }
-        currentStep++;
-        delay(1);
-    }
-
-    delay(10000);//10秒程度かっこづけポーズ
-
-    currentStep=0;
-    totalSteps=800;
-
-    while (currentStep <= totalSteps) {
-        for(int i=0;i<motor_NUM;i++){
-            currentPos[i] = calculateStepMotion(armAngle_tar[i], armAngle_zero[i], currentStep, totalSteps);
-            ServoArray[i+0]->setPosDeg(currentPos[i]);
-        }
-        currentStep++;
-        delay(20);
+    for(int i=0;i<4;i++){
+        ServoArray[i+1]->setPosDeg(armAngle_zero[i]);
     }
 
     nextTask = taskManager(1);
@@ -286,6 +263,8 @@ void motion::posture::nop(){
     nextTask = taskManager(1);
     delay(10);
 }
+
+
 
 void motion::posture::DebugMode(){
     Serial.printf("DebugMode! comand!\n");

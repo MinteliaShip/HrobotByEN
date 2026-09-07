@@ -3,6 +3,7 @@
 int map_controller(int in,int ineRange,int inMin,int inMax,int outMin,int outMax){//コントローラ用に不感範囲を設けたmap
     int in_abs = abs(in);
     int in_pn = in / in_abs;
+    //Serial.printf("in_pn:%d \n",in_pn);
 
     int in_cut;
     if(in_abs < ineRange){
@@ -10,6 +11,7 @@ int map_controller(int in,int ineRange,int inMin,int inMax,int outMin,int outMax
     }else{
         in_cut = in - ineRange*in_pn;
     }
+    //Serial.printf("in_cut:%d \n",in_cut);
 
     return map(in_cut,inMin+ineRange,inMax-ineRange,outMin,outMax);
 }

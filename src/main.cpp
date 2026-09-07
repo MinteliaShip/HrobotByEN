@@ -41,11 +41,13 @@ NextTaskType taskManager(bool canDelegateTask){//タスク管理。
 
             //歩行モーション
             /*************************/
-            int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,-127,128,20,-10,10);
-            if(stick_lx > 0){
+            int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
+            Serial.printf("stick_lx:%d",stick_ly);
+            if(stick_ly > 0){
                 nextTask_ = motion::walk::walk1;
                 break;
             }
+
 
             /*************************/
             //姿勢モーション
