@@ -5,7 +5,6 @@
 
 /**********************************************/
 //補助関数
-//未検証
 int map_controller(int in,int ineRange,int inMin,int inMax,int outMin,int outMax);
 
 void bondReset();

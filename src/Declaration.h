@@ -4,6 +4,8 @@
 #include <esp_gap_bt_api.h>
 #include <LittleFS.h>
 #include "Config.h"
+#include "ConfigDef.h"
+#include "FootController.h"
 
 #ifndef DECL
 #define DECL
@@ -13,10 +15,7 @@ using NextTaskType = void (*)();
 NextTaskType taskManager(bool canDelegateTask);
 extern NextTaskType nextTask;
 
-
 /*宣言・初期化・定数*/
-extern FootController leftFoot;
-extern FootController rightFoot;
 extern servoICS::Servo hipServo;
 
 extern servoICS::Servo leftFoot1;
@@ -33,5 +32,8 @@ extern servoICS::Servo rightArmJ4;
 
 extern servoICS::Servo* ServoArray[19];
 extern const char* ServoArray_name[19];
+
+extern FootController leftFoot;
+extern FootController rightFoot;
 
 #endif

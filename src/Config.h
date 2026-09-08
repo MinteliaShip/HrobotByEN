@@ -1,8 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include "ConfigDef.h"
 #include <Arduino.h>
-#include "FootController.h"
 /**********************************************/
 //基本設定
 extern int serialPC_bps;
@@ -43,13 +43,11 @@ namespace Config {
     extern const char hipServoID;
 
     //足寸法
-    extern FootController::leng8 lengs8;
-    extern FootController::IcsServoConfig rightfootConfig;
-
-    extern FootController::IcsServoConfig leftfootConfig;
+    extern float lengs8[8];
 
     //歩行軌道のパラメータ
     extern GaitParameters MV_X_PARAM;
+    extern GaitParameters MV_X_PARAM_TEST;
 
     extern GaitParameters MV_FREE_PARAM;
 

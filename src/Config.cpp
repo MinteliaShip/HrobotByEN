@@ -31,35 +31,26 @@ const long Config::bpsServo = 115200;
 const char Config::hipServoID = 11;
 
 //足寸法
-FootController::leng8 Config::lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
-FootController::IcsServoConfig Config::rightfootConfig{
-9,
-12,
-13,
-14,
-15,
-enPin,
-ServoSerial
-};
-
-FootController::IcsServoConfig Config::leftfootConfig{
-10,
-16,
-17,
-18,
-19,
-enPin,
-ServoSerial
-};
-
+//float Config::lengs8[8]={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
+float Config::lengs8[8]={9.4,29.219,25.4,120,120.0,25.4,25,11.5};
 //歩行軌道のパラメータ
 GaitParameters Config::MV_X_PARAM(
 0.7,    //T
 40,     //h
 120,    //Wd
 0.8,    //DutyX
-0.8,     //DutyY
+0.8,    //DutyY
 40,     //Fps
+50.0    //Spac
+);
+
+GaitParameters Config::MV_X_PARAM_TEST(
+2.0,    //T
+50,     //h
+100,    //Wd
+0.8,    //DutyX
+0.8,    //DutyY
+10,     //Fps
 50.0    //Spac
 );
 
@@ -96,8 +87,8 @@ char Config::leftFootJ5ID = 19;
 
 char Config::rightFootJ1ID = 9;
 char Config::rightFootJ2ID = 12;
-char Config::rightFootJ3ID = 13;
-char Config::rightFootJ4ID = 14;
+char Config::rightFootJ3ID = 14;
+char Config::rightFootJ4ID = 13;
 char Config::rightFootJ5ID = 15;
 
 char Config::leftArmJ1ID = 1;

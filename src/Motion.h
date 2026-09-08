@@ -22,6 +22,7 @@ namespace motion{//モーション関数の置き場所
         void taunt();
         void nop();
         void DebugMode();
+        void pose();
     }
 }
 

@@ -7,8 +7,6 @@
 #include "Motion.h"
 #include "frameData.h"
 
-
-
 /*　*/
 //デバッグ用関数　コマンド
 //毎ループ推奨
@@ -85,6 +83,12 @@ NextTaskType taskManager(bool canDelegateTask){//タスク管理。
                 nextTask_ = motion::posture::taunt;
                 break;
             }
+
+            // main.cpp 内の taskManager 関数から抜粋
+            if(Dualshock4.data.button.options){
+                nextTask = motion::posture::pose; // taunt から pose へ割り当てを変更（必要に応じてボタンを変更してください）
+                break;
+            }
         }
 
         if(Dualshock4.data.button.ps){
@@ -114,8 +118,10 @@ void setup() {
   
 
   #ifndef SIMULATION
-  leftFoot.setOffset(7726,7466,7378,7429,7576);
-  rightFoot.setOffset(7620,7509,7452,7168,7638);
+  const float offsetDeg[10]={1.79,3.98,-2.13,-2.09,4.83,14.48,3.21,0.00,-7.56,4.96};
+  for(int i=0;i<10;i++){
+    ServoArray[i+9]->setOffsetDeg(offsetDeg[i]);
+  }
   #endif
 
     while(Dualshock4.isConnected()==0){
