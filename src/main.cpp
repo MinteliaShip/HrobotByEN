@@ -84,9 +84,8 @@ NextTaskType taskManager(bool canDelegateTask){//タスク管理。
                 break;
             }
 
-            // main.cpp 内の taskManager 関数から抜粋
-            if(Dualshock4.data.button.options){
-                nextTask = motion::posture::pose; // taunt から pose へ割り当てを変更（必要に応じてボタンを変更してください）
+            if(Dualshock4.data.button.share){
+                nextTask_ = motion::posture::pose;
                 break;
             }
         }

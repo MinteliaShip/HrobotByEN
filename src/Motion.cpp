@@ -14,9 +14,10 @@ float phaseShift_f(float inStep,float phaseShift){
 void motion::walk::walk1() {
     Serial.printf("walk!\n");
 
+
     FrameLimiter framelim;
 
-    GaitParameters &param_p = Config::MV_X_PARAM_TEST;
+    GaitParameters &param_p = Config::MV_X_PARAM;
 
     // 歩行パラメータで指定されたFPSに設定
     framelim.setInterval(1000 / param_p.Fps);
@@ -27,7 +28,7 @@ void motion::walk::walk1() {
     float DutyX = param_p.DutyX;
     float DutyY = param_p.DutyY;
     int Fps = param_p.Fps;
-    int Spac = 20;
+    int Spac = 40;
 
     // 1周期あたりの総フレーム数
     int totalFrames = Fps * T;
@@ -36,6 +37,7 @@ void motion::walk::walk1() {
     float targetZ = -150.0f;
 
     leftFoot.FootMotorInvert(1,1,1,-1,1);
+    rightFoot.FootMotorInvert(1,1,1,1,-1);
 
     for (int frame = 0; frame < totalFrames; frame++) {
         // 経過時間 ts の計算 (秒)
@@ -49,12 +51,34 @@ void motion::walk::walk1() {
         Vector2 rightPosXY = rightFoot.tread(h,Wd,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
 
 
+        // 遊脚直前の蹴り下げオフセット処理 (脚全体での蹴り出し)
+        float kick_x_left = 0.0f;
+        float kick_y_left = 0.0f;
+        float kick_x_right = 0.0f;
+        float kick_y_right = 0.0f;
+
+        // 接地期の終盤で後ろ・下へ押し込む
+        float push_window = 0.3f; // 蹴り出し時間 (秒)
+        float support_end = DutyX * T / 2.0f;
+
+        if (ts_left > (support_end - push_window) && ts_left < support_end) {
+            kick_x_left = -6.0f; // 後ろ方向へ押し出し (mm)
+            kick_y_left = -5.0f;  // 地面方向へ押し下げ (mm)
+        }
+
+        if (ts_right > (support_end - push_window) && ts_right < support_end) {
+            kick_x_right = -6.0f;
+            kick_y_right = -5.0f;
+        }
+
+
         FootController::Pose leftPose={
-        320-leftPosXY.y,-Spac,-leftPosXY.x,
+        323-leftPosXY.y - kick_y_left,-Spac,-leftPosXY.x -20 + kick_x_left,
         0, 0, 0
         };
+
         FootController::Pose rightPose={
-        320-rightPosXY.y,+Spac,-rightPosXY.x,
+        320-rightPosXY.y - kick_y_right,+Spac,-rightPosXY.x -20 + kick_x_right,
         0, 0, 0
         };
 
@@ -378,93 +402,12 @@ void motion::posture::DebugMode(){
 }
 
 void motion::posture::pose() {
-    Serial.printf("Pose / Manual Tuning Mode!\n");
-    nextTask = taskManager(0);
 
-    bool free_mode = true;       // true: 角度取得モード, false: 角度固定（マニュアル調整）モード
-    bool push_circle = false;
-    bool push_up = false;
-    bool push_down = false;
-
-    int selectedServo = 0;       // 操作対象のサーボインデックス (0 ～ 18)
-    float targetAngles[19] = {0}; // 各サーボの角度保持用配列
-
-    FrameLimiter framelim;
-    framelim.setInterval(20);    // 50Hz (20ms周期) で制御ループを実行
-
-    while (nextTask == nullptr) {
-        // --- モード切替判定（○ボタン） ---
-        if (!push_circle && Dualshock4.data.button.circle) {
-            free_mode = !free_mode;
-            Serial.printf("Mode Switched: %s\n", free_mode ? "ANGLE READ (FREE)" : "ANGLE HOLD (MANUAL)");
-        }
-        push_circle = Dualshock4.data.button.circle;
-
-        // ----------------------------------------------------
-        // 1. 角度取得モード (FREE MODE)
-        // ----------------------------------------------------
-        if (free_mode) {
-            Serial.print("{");
-            for (int i = 0; i < 19; i++) {
-                auto returnData = ServoArray[i]->setPosIcs(0).getPosDeg();
-                
-                // 受信成功時は値を保持・出力、失敗時は "ERR" を出力
-                if (returnData.error_msg == nullptr || strlen(returnData.error_msg) == 0) {
-                    targetAngles[i] = returnData.value;
-                    Serial.print(targetAngles[i]);
-                } else {
-                    Serial.print("\"ERR\"");
-                }
-
-                if (i < 18) Serial.print(",");
-            }
-            Serial.println("}");
-        } 
-        // ----------------------------------------------------
-        // 2. 角度固定・手動調整モード (HOLD MODE)
-        // ----------------------------------------------------
-        else {
-            // --- 十字キーで操作サーボ切り替え ---
-            if (!push_up && Dualshock4.data.button.up) {
-                selectedServo = (selectedServo + 1) % 19; // 上：インクリメント
-                Serial.printf("Selected Servo Index: %d (%s)\n", selectedServo, ServoArray_name[selectedServo]);
-            }
-            push_up = Dualshock4.data.button.up;
-
-            if (!push_down && Dualshock4.data.button.down) {
-                selectedServo = (selectedServo - 1 + 19) % 19; // 下：デクリメント
-                Serial.printf("Selected Servo Index: %d (%s)\n", selectedServo, ServoArray_name[selectedServo]);
-            }
-            push_down = Dualshock4.data.button.down;
-
-            // --- アナログスティックによる角度加減算 (右スティックY軸を利用) ---
-            // デッドゾーン除去 (-128 ～ 127)
-            int stickY = map_controller(Dualshock4.data.analog.stick.ry, 15, -128, 127, -100, 100);
-            
-            if (stickY != 0) {
-                // 最大傾斜時（100%）に 1秒間で 90度 変化
-                // 50Hz (20ms) ループのため、1フレームあたりの最大変化量は 90度 / 50 = 1.8度
-                float delta = (float)stickY / 100.0f * 1.8f;
-                targetAngles[selectedServo] += delta;
-            }
-
-            // 指令角度を全サーボに送出
-            Serial.print("{");
-            for (int i = 0; i < 19; i++) {
-                ServoArray[i]->setPosDeg(targetAngles[i]);
-                Serial.print(targetAngles[i]);
-                if (i < 18) Serial.print(",");
-            }
-            Serial.println("}");
-        }
-
-        // --- 脱出判定 (×ボタン) ---
-        if (Dualshock4.data.button.cross) {
-            nextTask = taskManager(1);
-        } else {
-            nextTask = taskManager(0);
-        }
-
-        framelim.sync();
+    float tarPos[9] = {0.00,0.0,60.00,23.59,-109.79,00.00,60.00,7.96,-99.49};
+    for(int i=0;i<9;i++){
+        ServoArray[i]->setPosDeg(tarPos[i]);
     }
+
+    nextTask = taskManager(1);
+
 }

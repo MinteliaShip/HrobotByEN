@@ -35,12 +35,12 @@ const char Config::hipServoID = 11;
 float Config::lengs8[8]={9.4,29.219,25.4,120,120.0,25.4,25,11.5};
 //歩行軌道のパラメータ
 GaitParameters Config::MV_X_PARAM(
-0.7,    //T
-40,     //h
+0.8,    //T
+70,     //h
 120,    //Wd
 0.8,    //DutyX
 0.8,    //DutyY
-40,     //Fps
+30,     //Fps
 50.0    //Spac
 );
 
