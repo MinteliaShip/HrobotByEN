@@ -85,12 +85,20 @@ NextTaskType taskManager(bool canDelegateTask){//タスク管理。
             }
 
             if(Dualshock4.data.button.share){
-                nextTask_ = motion::posture::pose;
+                if(Dualshock4.data.button.square){
+                    nextTask_ = motion::posture::pose;  //腕適度な位置
+                }else if(Dualshock4.data.button.circle){
+                    //nextTask_ = motion::posture::chair; //椅子に座らせたい時
+                }else if(Dualshock4.data.button.cross){
+                    //nextTask_ = motion::posture::kneeling; //膝立ち
+                }
+
                 break;
             }
         }
 
         if(Dualshock4.data.button.ps){
+
             nextTask_ = motion::posture::DebugMode;
             while(Dualshock4.data.button.ps==0);
             break;

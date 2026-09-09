@@ -21,7 +21,15 @@ struct GaitParameters {
   float DutyY;
   int Fps;
   float Spac;
-  GaitParameters(float T_, float h_, float Wd_, float DutyX_, float DutyY_, int Fps_, float Spac_) : T(T_), h(h_), Wd(Wd_), DutyX(DutyX_), DutyY(DutyY_), Fps(Fps_), Spac(Spac_) {}
+  float offsetZ_left;
+  float offsetX_left;
+  float offsetZ_right;
+  float offsetX_right;
+  float kickX_left;
+  float kickY_left;
+  float kickX_right;
+  float kickY_right;
+  float kickTime;
 };
 
 
@@ -47,6 +55,8 @@ namespace Config {
 
     //歩行軌道のパラメータ
     extern GaitParameters MV_X_PARAM;
+    extern GaitParameters MV_X_PARAM_2;
+    extern GaitParameters MV_X_PARAM_3;
     extern GaitParameters MV_X_PARAM_TEST;
 
     extern GaitParameters MV_FREE_PARAM;

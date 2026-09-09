@@ -70,6 +70,12 @@ const char* ServoArray_name[19]{
     "rightFoot5"
 };
 
+const int leftArm_index_num = 1;
+const int rightArm_index_num = 5;
+const int leftFoot_index_num = 9;
+const int rightFoot_index_num = 14;
+const int arm_index_num = 1;
+const int foot_index_num = 9;
 
 FootController leftFoot(&ServoArray[9],Config::lengs8);
 FootController rightFoot(&ServoArray[14],Config::lengs8);

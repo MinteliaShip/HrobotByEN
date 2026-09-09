@@ -23,6 +23,8 @@ namespace motion{//モーション関数の置き場所
         void nop();
         void DebugMode();
         void pose();
+        void chair();   //椅子に座る
+        void kneeling();   //膝立ち
     }
 }
 

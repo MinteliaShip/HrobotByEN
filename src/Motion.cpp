@@ -11,13 +11,14 @@ float phaseShift_f(float inStep,float phaseShift){
   return result;
 }
 
+
+
 void motion::walk::walk1() {
     Serial.printf("walk!\n");
 
-
     FrameLimiter framelim;
 
-    GaitParameters &param_p = Config::MV_X_PARAM;
+    GaitParameters &param_p = Config::MV_X_PARAM_3;
 
     // 歩行パラメータで指定されたFPSに設定
     framelim.setInterval(1000 / param_p.Fps);
@@ -28,73 +29,77 @@ void motion::walk::walk1() {
     float DutyX = param_p.DutyX;
     float DutyY = param_p.DutyY;
     int Fps = param_p.Fps;
-    int Spac = 40;
+    int Spac = param_p.Spac;
+
+    float offsetZ_left = param_p.offsetZ_left;
+    float offsetX_left = param_p.offsetX_left;
+    float offsetZ_right = param_p.offsetZ_right;
+    float offsetX_right = param_p.offsetX_right;
+
+    float kickX_left_val = param_p.kickX_left;
+    float kickY_left_val = param_p.kickY_left;
+    float kickX_right_val = param_p.kickX_right;
+    float kickY_right_val = param_p.kickY_right;
+    float push_window = param_p.kickTime;
 
     // 1周期あたりの総フレーム数
     int totalFrames = Fps * T;
 
-    // 前傾・足下ろし位置の高さ初期値（必要に応じて調整）
-    float targetZ = -150.0f;
-
     leftFoot.FootMotorInvert(1,1,1,-1,1);
     rightFoot.FootMotorInvert(1,1,1,1,-1);
+    while(nextTask==motion::walk::walk1){
+        for (int frame = 0; frame < totalFrames; frame++) {
+            // 経過時間 ts の計算 (秒)
+            float ts_left = (float)frame / Fps;
+            // 右足は位相を半周期 (T / 2.0) ずらす
+            float ts_right = fmod(ts_left + (T / 2.0f), T);
 
-    for (int frame = 0; frame < totalFrames; frame++) {
-        // 経過時間 ts の計算 (秒)
-        float ts_left = (float)frame / Fps;
-        // 右足は位相を半周期 (T / 2.0) ずらす
-        float ts_right = fmod(ts_left + (T / 2.0f), T);
+            // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+            Vector2 leftPosXY = leftFoot.tread(h,Wd,DutyX,DutyY,T,ts_left);
+            
+            Vector2 rightPosXY = rightFoot.tread(h,Wd,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
 
-        // 軌道生成処理 (FootController.cpp の tread 関数を利用)
-        Vector2 leftPosXY = leftFoot.tread(h,Wd,DutyX,DutyY,T,ts_left);
-        
-        Vector2 rightPosXY = rightFoot.tread(h,Wd,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+            float kick_x_left = 0.0f;
+            float kick_y_left = 0.0f;
+            float kick_x_right = 0.0f;
+            float kick_y_right = 0.0f;
+
+            // 接地期の終盤で後ろ・下へ押し込む
+            float support_end = DutyX * T / 2.0f;
+
+            if (ts_left > (support_end - push_window) && ts_left < support_end) {
+                kick_x_left = kickX_left_val;
+                kick_y_left = kickY_left_val;
+            }
+
+            if (ts_right > (support_end - push_window) && ts_right < support_end) {
+                kick_x_right = kickX_right_val;
+                kick_y_right = kickY_right_val;
+            }
 
 
-        // 遊脚直前の蹴り下げオフセット処理 (脚全体での蹴り出し)
-        float kick_x_left = 0.0f;
-        float kick_y_left = 0.0f;
-        float kick_x_right = 0.0f;
-        float kick_y_right = 0.0f;
+            FootController::Pose leftPose={
+            offsetZ_left-leftPosXY.y - kick_y_left,-Spac,-leftPosXY.x + offsetX_left + kick_x_left,
+            0, 0, 0
+            };
 
-        // 接地期の終盤で後ろ・下へ押し込む
-        float push_window = 0.3f; // 蹴り出し時間 (秒)
-        float support_end = DutyX * T / 2.0f;
+            FootController::Pose rightPose={
+            offsetZ_right-rightPosXY.y - kick_y_right,+Spac,-rightPosXY.x + offsetX_right + kick_x_right,
+            0, 0, 0
+            };
 
-        if (ts_left > (support_end - push_window) && ts_left < support_end) {
-            kick_x_left = -6.0f; // 後ろ方向へ押し出し (mm)
-            kick_y_left = -5.0f;  // 地面方向へ押し下げ (mm)
+            // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+            leftFoot.setTargetPose(leftPose);
+            rightFoot.setTargetPose(rightPose);
+
+            // 次回タスク判定（タスク移行要求の確認）
+            nextTask = taskManager(0);
+
+            // 指定FPS間隔の同期・待機処理
+            framelim.sync();
         }
-
-        if (ts_right > (support_end - push_window) && ts_right < support_end) {
-            kick_x_right = -6.0f;
-            kick_y_right = -5.0f;
-        }
-
-
-        FootController::Pose leftPose={
-        323-leftPosXY.y - kick_y_left,-Spac,-leftPosXY.x -20 + kick_x_left,
-        0, 0, 0
-        };
-
-        FootController::Pose rightPose={
-        320-rightPosXY.y - kick_y_right,+Spac,-rightPosXY.x -20 + kick_x_right,
-        0, 0, 0
-        };
-
-        // 逆運動学 (IK) を介して各足のサーボへ指令を出力
-        leftFoot.setTargetPose(leftPose);
-        rightFoot.setTargetPose(rightPose);
-
-        // 次回タスク判定（タスク移行要求の確認）
-        nextTask = taskManager(0);
-
-        // 指定FPS間隔の同期・待機処理
-        framelim.sync();
+        nextTask = taskManager(1);
     }
-
-    // 1歩行周期完了後、タスクの移行判定を許可
-    nextTask = taskManager(1);
     return;
 }
 
@@ -402,12 +407,26 @@ void motion::posture::DebugMode(){
 }
 
 void motion::posture::pose() {
-
     float tarPos[9] = {0.00,0.0,60.00,23.59,-109.79,00.00,60.00,7.96,-99.49};
     for(int i=0;i<9;i++){
         ServoArray[i]->setPosDeg(tarPos[i]);
     }
 
     nextTask = taskManager(1);
+}
 
+void motion::posture::chair() {
+    float tarPos[10] = {1.45,7.53,79.68,6.85,-3.91,13.84,8.07,90.96,-11.21,-4.69};
+    for(int i=0;i<10;i++){
+        ServoArray[i+foot_index_num]->setPosDeg(tarPos[i],false);
+    }
+    nextTask = taskManager(1);
+}
+
+void motion::posture::kneeling() {
+    float tarPos[10] = {3.07,2.70,-23.05,-106.65,2.26,18.70,7.09,-14.82,94.57,2.73};
+    for(int i=0;i<10;i++){
+        ServoArray[i+foot_index_num]->setPosDeg(tarPos[i],false);
+    }
+    nextTask = taskManager(1);
 }

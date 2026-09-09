@@ -34,45 +34,83 @@ const char Config::hipServoID = 11;
 //float Config::lengs8[8]={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
 float Config::lengs8[8]={9.4,29.219,25.4,120,120.0,25.4,25,11.5};
 //歩行軌道のパラメータ
-GaitParameters Config::MV_X_PARAM(
-0.8,    //T
-70,     //h
-120,    //Wd
-0.8,    //DutyX
-0.8,    //DutyY
-30,     //Fps
-50.0    //Spac
-);
+GaitParameters Config::MV_X_PARAM{
+    0.7,    //T
+    50,     //h
+    150,    //Wd
+    0.8,    //DutyX
+    0.73,    //DutyY
+    40,     //Fps
+    40.0,    //Spac
+    323.0f,  // offsetZ_left
+    -15.0f,  // offsetX_left
+    320.0f,  // offsetZ_right
+    -15.0f,  // offsetX_right
+    -6.0f,   // kickX_left
+    -5.0f,   // kickY_left
+    -6.0f,   // kickX_right
+    -5.0f,   // kickY_right
+    0.3f     // kickTime
+};
 
-GaitParameters Config::MV_X_PARAM_TEST(
-2.0,    //T
-50,     //h
-100,    //Wd
-0.8,    //DutyX
-0.8,    //DutyY
-10,     //Fps
-50.0    //Spac
-);
+GaitParameters Config::MV_X_PARAM_2{
+    1.0,     // T
+    40,      // h
+    120,     // Wd
+    0.90,    // DutyX
+    0.80,    // DutyY
+    40,      // Fps
+    40,      // Spac
+    323.0f,  // offsetZ_left
+    -15.0f,  // offsetX_left
+    320.0f,  // offsetZ_right
+    -15.0f,  // offsetX_right
+    -0.0f,   // kickX_left
+    -6.0f,   // kickY_left
+    -0.0f,   // kickX_right
+    -6.0f,   // kickY_right
+    0.3f     // kickTime
+};
 
-GaitParameters Config::MV_FREE_PARAM(
-1.0,    //T
-60,     //h
-100,    //Wd
-0.6,    //DutyX
-0.65,     //DutyY
-30,     //Fps
-20.0    //Spac
-);
 
-GaitParameters Config::MV_Y_PARAM(
-0.7,    //T
-40,     //h
-120,    //Wd
-0.8,    //DutyX
-0.8,     //DutyY
-40,     //Fps
-50.0    //Spac
-);
+GaitParameters Config::MV_X_PARAM_3{
+    0.9,     // T
+    40,      // h
+    120,     // Wd
+    0.90,    // DutyX
+    0.80,    // DutyY
+    40,      // Fps
+    30,      // Spac
+    323.0f,  // offsetZ_left
+    -17.0f,  // offsetX_left
+    320.0f,  // offsetZ_right
+    -17.0f,  // offsetX_right
+    -0.0f,   // kickX_left
+    -6.0f,   // kickY_left
+    -0.0f,   // kickX_right
+    -6.0f,   // kickY_right
+    0.3f     // kickTime
+};
+
+
+GaitParameters Config::MV_X_PARAM_TEST{
+    2.0,    //T
+    50,     //h
+    100,    //Wd
+    0.8,    //DutyX
+    0.8,    //DutyY
+    10,     //Fps
+    50.0,    //Spac
+    323.0f,  // offsetZ_left
+    -15.0f,  // offsetX_left
+    320.0f,  // offsetZ_right
+    -15.0f,  // offsetX_right
+    -0.0f,   // kickX_left
+    -4.0f,   // kickY_left
+    -0.0f,   // kickX_right
+    -4.0f,   // kickY_right
+    0.3f     // kickTime
+};
 
 int Config::IDEL_FPS = 10;
 float Config::IDLE_SPAC = 50.0;

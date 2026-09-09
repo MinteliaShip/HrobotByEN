@@ -33,6 +33,14 @@ extern servoICS::Servo rightArmJ4;
 extern servoICS::Servo* ServoArray[19];
 extern const char* ServoArray_name[19];
 
+extern const int leftArm_index_num;
+extern const int rightArm_index_num;
+extern const int leftFoot_index_num;
+extern const int rightFoot_index_num;
+extern const int arm_index_num;
+extern const int foot_index_num;
+
+
 extern FootController leftFoot;
 extern FootController rightFoot;
 
