@@ -18,7 +18,7 @@ void motion::walk::walk1() {
 
     FrameLimiter framelim;
 
-    GaitParameters &param_p = Config::MV_X_PARAM_3;
+    GaitParameters &param_p = Config::MV_X_PARAM_2;
 
     // 歩行パラメータで指定されたFPSに設定
     framelim.setInterval(1000 / param_p.Fps);

@@ -159,10 +159,15 @@ FootController::FootController(servoICS::Servo* ServoArray_[], float footLeng_[8
 
 void FootController::setJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_){
   servoJ1->setPos(J1_);
+  delay(1);
   servoJ2->setPos(J2_);
+  delay(1);
   servoJ3->setPos(J3_);
+  delay(1);
   servoJ4->setPos(J4_);
+  delay(1);
   servoJ5->setPos(J5_);
+  delay(1);
 }
 void FootController::setJointAnglesDeg(float J1_,float J2_,float J3_,float J4_,float J5_){
   setJointAngles(servoICS::fromDeg_toIcs(J1_),servoICS::fromDeg_toIcs(J2_),servoICS::fromDeg_toIcs(J3_),servoICS::fromDeg_toIcs(J4_),servoICS::fromDeg_toIcs(J5_)); 

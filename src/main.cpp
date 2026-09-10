@@ -129,6 +129,12 @@ void setup() {
   for(int i=0;i<10;i++){
     ServoArray[i+9]->setOffsetDeg(offsetDeg[i]);
   }
+
+
+  for(int i=0;i<19;i++){
+    ServoArray[i]->setStretch(90);
+  }
+
   #endif
 
     while(Dualshock4.isConnected()==0){

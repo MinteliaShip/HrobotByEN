@@ -54,37 +54,37 @@ GaitParameters Config::MV_X_PARAM{
 };
 
 GaitParameters Config::MV_X_PARAM_2{
-    1.0,     // T
-    40,      // h
-    120,     // Wd
-    0.90,    // DutyX
-    0.80,    // DutyY
-    40,      // Fps
-    40,      // Spac
+    0.9,     // T
+    50,      // h
+    90,     // Wd
+    0.95,    // DutyX
+    0.90,    // DutyY
+    30,      // Fps
+    30,      // Spac
     323.0f,  // offsetZ_left
-    -15.0f,  // offsetX_left
+    -35.0f,  // offsetX_left
     320.0f,  // offsetZ_right
-    -15.0f,  // offsetX_right
+    -35.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -6.0f,   // kickY_left
+    -2.0f,   // kickY_left
     -0.0f,   // kickX_right
-    -6.0f,   // kickY_right
+    -2.0f,   // kickY_right
     0.3f     // kickTime
 };
 
 
 GaitParameters Config::MV_X_PARAM_3{
     0.9,     // T
-    40,      // h
+    45,      // h
     120,     // Wd
     0.90,    // DutyX
     0.80,    // DutyY
     40,      // Fps
     30,      // Spac
-    323.0f,  // offsetZ_left
-    -17.0f,  // offsetX_left
-    320.0f,  // offsetZ_right
-    -17.0f,  // offsetX_right
+    318.0f,  // offsetZ_left
+    -23.0f,  // offsetX_left
+    315.0f,  // offsetZ_right
+    -23.0f,  // offsetX_right
     -0.0f,   // kickX_left
     -6.0f,   // kickY_left
     -0.0f,   // kickX_right
