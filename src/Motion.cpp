@@ -268,7 +268,7 @@ bool motion::walk::walk1() {
             int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
 
             float wd_def = (Wd*0.5) * stick_lx / 100.0;
-            float offsetY_def = 0*0.5 * stick_lx / 100.0;
+            float offsetY_def =1 * stick_lx / 100.0;
             float angle_def = (15*PI/360.0)*stick_lx / 100.0;
 
             float wd_left = Wd + wd_def;
