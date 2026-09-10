@@ -1,7 +1,6 @@
 #include "Declaration.h"
 
 PS4Controller Dualshock4;//実態の定義
-NextTaskType nextTask;
 
 servoICS::Servo hipServo(Config::ServoSerial,enPin,Config::hipServoID);
 servoICS::Servo leftFoot1(Config::ServoSerial,enPin,Config::leftFootJ1ID);

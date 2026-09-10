@@ -11,9 +11,6 @@
 #define DECL
 
 extern PS4Controller Dualshock4;
-using NextTaskType = void (*)();
-NextTaskType taskManager(bool canDelegateTask);
-extern NextTaskType nextTask;
 
 /*宣言・初期化・定数*/
 extern servoICS::Servo hipServo;

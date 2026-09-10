@@ -6,27 +6,27 @@
 
 namespace motion{//モーション関数の置き場所
     namespace walk{
-        void walk1();
+        bool walk1();
     }
 
     namespace posture{
         namespace battle{
-            void attack_Light_1();
-            void attack_Light_2();
-            void attack_Medium_1();
-            void attack_Medium_2();
-            void attack_Heavy_1();
-            void attack_Heavy_2();
+            bool attack_Light_left();
+            bool attack_Light_right();
+            bool attack_Medium_left();
+            bool attack_Medium_right();
+            bool attack_Heavy_1();
+            bool attack_Heavy_2();
         }
 
-        void taunt();
-        void nop();
-        void DebugMode();
-        void pose();
-        void chair();   //椅子に座る
-        void kneeling();   //膝立ち
+        bool taunt();
+        bool nop();
+        bool LOCK_DebugMode();//ブロッキング
+        bool pose();
+        bool chair();   //椅子に座る
+        bool kneeling();   //膝立ち
 
-        void hip_NB(); //[非ブロッキング] 腰回転
+        bool hip();//腰回転
     }
 }
 

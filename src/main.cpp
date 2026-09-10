@@ -28,6 +28,7 @@
 //移行許可ありで判定なし（操作なしや緊急動作なし）の場合、なにもしないnopを帰す。   
 //移行許可なしで判定なしの場合は、nullptrを帰す。
 
+void taskManager();
 
 void loop2(void *p);
 
@@ -43,87 +44,132 @@ void loop2_begin(){
     );
 }
 
-NextTaskType taskManager(bool canDelegateTask){//タスク管理。
-    //次に実行するタスクを選択する。
-    NextTaskType nextTask_ = nullptr;
-    //以下に判定内容と関数ポインタの指定。
-    do{
-        if(canDelegateTask){//処理移行の許可アリ
-            nextTask_ = motion::posture::nop;//なにもない場合は、nopになる。
+const uint32_t RIGHT_BIT     = (1UL << 0);
+const uint32_t DOWN_BIT      = (1UL << 1);
+const uint32_t UP_BIT        = (1UL << 2);
+const uint32_t LEFT_BIT      = (1UL << 3);
 
-            //歩行モーション
-            /*************************/
-            int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
-            Serial.printf("stick_lx:%d",stick_ly);
-            if(stick_ly > 0){
-                nextTask_ = motion::walk::walk1;
-                break;
-            }
+const uint32_t SQUARE_BIT    = (1UL << 4);
+const uint32_t CROSS_BIT     = (1UL << 5);
+const uint32_t CIRCLE_BIT    = (1UL << 6);
+const uint32_t TRIANGLE_BIT  = (1UL << 7);
 
+const uint32_t UPRIGHT_BIT   = (1UL << 8);
+const uint32_t DOWNRIGHT_BIT = (1UL << 9);
+const uint32_t UPLEFT_BIT    = (1UL << 10);
+const uint32_t DOWNLEFT_BIT  = (1UL << 11);
 
-            /*************************/
-            //姿勢モーション
+const uint32_t L1_BIT        = (1UL << 12);
+const uint32_t R1_BIT        = (1UL << 13);
+const uint32_t L2_BIT        = (1UL << 14);
+const uint32_t R2_BIT        = (1UL << 15);
 
-            //合わせボタン実行
-            if(Dualshock4.data.button.r3){
-                if(Dualshock4.data.button.r1){
-                    nextTask_ = motion::posture::battle::attack_Heavy_2;
-                    break;
-                }
-            }
+const uint32_t SHARE_BIT     = (1UL << 16);
+const uint32_t OPTIONS_BIT   = (1UL << 17);
+const uint32_t L3_BIT        = (1UL << 18);
+const uint32_t R3_BIT        = (1UL << 19);
 
-            //単体ボタン実行
-            if(Dualshock4.data.button.r2){
-                nextTask_ = motion::posture::battle::attack_Light_1;
-                break;
-            }
+const uint32_t PS_BIT        = (1UL << 20);
+const uint32_t TOUCHPAD_BIT  = (1UL << 21);
 
-            if(Dualshock4.data.button.l2){
-                nextTask_ = motion::posture::battle::attack_Light_2;
-                break;
-            }
+namespace activeMotion{//アクティブなモーションはtrueに。
+    namespace walk{
+        bool walk1;
+    }
 
-            if(Dualshock4.data.button.r1){
-                nextTask_ = motion::posture::battle::attack_Medium_1;
-                break;
-            }
-
-            if(Dualshock4.data.button.l1){
-                nextTask_ = motion::posture::battle::attack_Medium_2;
-                break;
-            }
-
-            if(Dualshock4.data.button.options){
-                nextTask_ = motion::posture::taunt;
-                break;
-            }
-
-            if(Dualshock4.data.button.share){
-                if(Dualshock4.data.button.square){
-                    nextTask_ = motion::posture::pose;  //腕適度な位置
-                }else if(Dualshock4.data.button.circle){
-                    //nextTask_ = motion::posture::chair; //椅子に座らせたい時
-                }else if(Dualshock4.data.button.cross){
-                    //nextTask_ = motion::posture::kneeling; //膝立ち
-                }
-
-                break;
-            }
+    namespace posture{
+        namespace battle{
+            bool attack_Light_left;
+            bool attack_Light_right;
+            bool attack_Medium_left;
+            bool attack_Medium_right;
+            bool attack_Heavy_1;
+            bool attack_Heavy_2;
         }
 
-        if(Dualshock4.data.button.ps){
+        bool taunt;
+        bool nop;
+        bool LOCK_DebugMode;
+        bool pose;
+        bool chair;   //椅子に座る
+        bool kneeling;   //膝立ち
 
-            nextTask_ = motion::posture::DebugMode;
-            while(Dualshock4.data.button.ps==0);
-            break;
-        }
-
-        
-    }while(false);
-
-    //タスクを返す。
-    return nextTask_;
+        bool hip;//腰回転
+    }
 }
+
+char busyPartsBit;
+//コントローラ判定
+//0 hip
+//1 leftArm
+//2 rightArm
+//3 leftFoot
+//4 rightFoot
+//5 Non
+//6 Non
+//7 Non
+
+const char HIP_BIT        = 0b00000001;
+const char LEFT_ARM_BIT   = 0b00000010;
+const char RIGHT_ARM_BIT  = 0b00000100;
+const char LEFT_FOOT_BIT  = 0b00001000;
+const char RIGHT_FOOT_BIT = 0b00010000;
+
+bool runExclusiveTask(bool startFlag,char targetBit, bool &activeFlag, bool (*motionFunc)()) {
+    if (activeFlag) {
+        // 実行中の場合：モーションを継続し、終了したら解放
+        if (!motionFunc()) {
+            activeFlag = false;
+            busyPartsBit &= ~targetBit;
+        }
+        return true;
+    } else if (startFlag && ((busyPartsBit & targetBit) == 0)) {
+        // 停止中で、リソースが空いている場合：起動条件を満たしていれば開始
+        // ※必要に応じて外部の起動トリガー条件を引数に追加可能
+        activeFlag = true;
+        busyPartsBit |= targetBit;
+        
+        // 初回実行
+        if (!motionFunc()) {
+            activeFlag = false;
+            busyPartsBit &= ~targetBit;
+        }
+        return true;
+    }
+    return false; // 他のタスクが占有中のため実行不可
+}
+
+void taskManager(){//タスク管理。
+    bool active=0;
+
+    uint32_t button_bits = 0;
+    memcpy(&button_bits, &Dualshock4.data.button, sizeof(Dualshock4.data.button));
+    
+    //腰回転
+    runExclusiveTask(true,HIP_BIT,activeMotion::posture::hip,motion::posture::hip);
+
+    //歩行モーション
+    int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
+    Serial.printf("stick_lx:%d\n",stick_ly);
+    runExclusiveTask(button_bits == L3_BIT || (stick_ly > 0),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walk1,motion::walk::walk1);
+
+    //単押しの攻撃モーション
+    active += runExclusiveTask(button_bits == L1_BIT || (button_bits == (L1_BIT | R1_BIT)) || (button_bits == (L1_BIT | R2_BIT)),LEFT_ARM_BIT,activeMotion::posture::battle::attack_Light_left,motion::posture::battle::attack_Light_left);
+    active += runExclusiveTask(button_bits == L2_BIT || (button_bits == (L2_BIT | R1_BIT)) || (button_bits == (L2_BIT | R2_BIT)),LEFT_ARM_BIT,activeMotion::posture::battle::attack_Medium_left,motion::posture::battle::attack_Medium_left);
+
+    active += runExclusiveTask(button_bits == R1_BIT || (button_bits == (L1_BIT | R1_BIT))|| (button_bits == (L2_BIT | R1_BIT)),RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Light_right,motion::posture::battle::attack_Light_right);
+    active += runExclusiveTask(button_bits == R2_BIT || (button_bits == (L1_BIT | R2_BIT))|| (button_bits == (L2_BIT | R2_BIT)),RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Medium_right,motion::posture::battle::attack_Medium_right);
+
+    runExclusiveTask(!active,0,activeMotion::posture::nop,motion::posture::nop);
+
+    //姿勢を正す。 強制移行可能
+    runExclusiveTask(button_bits == SHARE_BIT,0,activeMotion::posture::pose,motion::posture::pose);
+    runExclusiveTask(button_bits == OPTIONS_BIT,0,activeMotion::posture::taunt,motion::posture::taunt);
+    //デバッグモード 強制移行可能
+    runExclusiveTask(button_bits == PS_BIT,0,activeMotion::posture::LOCK_DebugMode,motion::posture::LOCK_DebugMode);
+}
+
+FrameLimiter framelim;
 
 void setup() {
     Serial.begin(serialPC_bps);
@@ -161,21 +207,21 @@ void setup() {
         }
         ServoArray[13]->setStretch(1);
         ServoArray[18]->setStretch(1);
+
+        ServoArray[0]->setSkip(true);
     #endif
 
     Dualshock4.setLed(255, 0, 0);
     Dualshock4.sendToController();
 
+    framelim.setInterval(1000 / 40);
 
-    nextTask = taskManager(1);
+
 }
 
 void loop() {
-    Dualshock4.setLed(100, 100, 100);
-    Dualshock4.sendToController();
-
-    NextTaskType runTask = nextTask;
-    runTask();
+    taskManager();
+    framelim.sync();
 }
 
 namespace loop2_task
@@ -185,7 +231,6 @@ namespace loop2_task
     volatile unsigned long startTime = 0;
     volatile bool resetRumble_flag=false;
 }
-
 
 void resetRumble(long time_ms) {
     loop2_task::startTime = millis();
