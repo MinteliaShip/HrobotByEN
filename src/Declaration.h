@@ -44,4 +44,6 @@ extern const int foot_index_num;
 extern FootController leftFoot;
 extern FootController rightFoot;
 
+void resetRumble(long time);
+
 #endif

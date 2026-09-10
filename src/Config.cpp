@@ -55,21 +55,21 @@ GaitParameters Config::MV_X_PARAM{
 
 GaitParameters Config::MV_X_PARAM_2{
     0.9,     // T
-    50,      // h
-    90,     // Wd
+    52,      // h
+    70,      // Wd
     0.95,    // DutyX
     0.90,    // DutyY
     30,      // Fps
     30,      // Spac
-    323.0f,  // offsetZ_left
-    -35.0f,  // offsetX_left
-    320.0f,  // offsetZ_right
-    -35.0f,  // offsetX_right
+    314.0f,  // offsetZ_left
+    -30.0f,  // offsetX_left
+    310.0f,  // offsetZ_right
+    -30.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -2.0f,   // kickY_left
+    -0.7f,   // kickY_left
     -0.0f,   // kickX_right
-    -2.0f,   // kickY_right
-    0.3f     // kickTime
+    -0.7f,   // kickY_right
+    0.4f     // kickTime
 };
 
 

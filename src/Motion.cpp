@@ -1,6 +1,13 @@
 #include "Motion.h"
 #include "ConfigDef.h"
 
+void VIB(){
+    Dualshock4.setLed(255, 10, 10);
+    Dualshock4.setRumble(255, 0);
+    Dualshock4.sendToController();
+    resetRumble(300);
+}
+
 float phaseShift_f(float inStep,float phaseShift){
   float result = 0;
   if(phaseShift>inStep){
@@ -11,14 +18,176 @@ float phaseShift_f(float inStep,float phaseShift){
   return result;
 }
 
+void startWalking(GaitParameters &param_p){//静止状態から歩行状態への移行
+    FrameLimiter framelim;
 
+    // 歩行パラメータで指定されたFPSに設定
+    framelim.setInterval(1000 / param_p.Fps);
+
+    float T = param_p.T*0.90;
+    float h = param_p.h*0.5;
+    float DutyX = param_p.DutyX;
+    float DutyY = param_p.DutyY;
+    int Fps = param_p.Fps;
+    int Spac = param_p.Spac;
+
+    float offsetZ_left = param_p.offsetZ_left;
+    float offsetX_left = -27;
+    float offsetZ_right = param_p.offsetZ_right;
+    float offsetX_right = -27;
+
+    float kickX_left_val = param_p.kickX_left*0;
+    float kickY_left_val = param_p.kickY_left*0;
+    float kickX_right_val = param_p.kickX_right*0;
+    float kickY_right_val = param_p.kickY_right*0;
+    float push_window = param_p.kickTime;
+
+    // 1周期あたりの総フレーム数
+    int totalFrames = Fps * T;
+
+    leftFoot.FootMotorInvert(1,1,1,-1,1);
+    rightFoot.FootMotorInvert(1,1,1,1,-1);
+    for (int frame = 0; frame < totalFrames; frame++) {
+        // 経過時間 ts の計算 (秒)
+        float ts_left = (float)frame / Fps;
+        // 右足は位相を半周期 (T / 2.0) ずらす
+        float ts_right = fmod(ts_left + (T / 2.0f), T);
+
+        float Wd = map(frame,0,totalFrames,0,(int)param_p.Wd);//推移していく。
+
+        // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+        Vector2 leftPosXY = leftFoot.tread(h,Wd,DutyX,DutyY,T,ts_left);
+        
+        Vector2 rightPosXY = rightFoot.tread(h,Wd,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+
+        float kick_x_left = 0.0f;
+        float kick_y_left = 0.0f;
+        float kick_x_right = 0.0f;
+        float kick_y_right = 0.0f;
+
+        // 接地期の終盤で後ろ・下へ押し込む
+        float support_end = DutyX * T / 2.0f;
+
+        if (ts_left > (support_end - push_window) && ts_left < support_end) {
+            kick_x_left = kickX_left_val;
+            kick_y_left = kickY_left_val;
+        }
+
+        if (ts_right > (support_end - push_window) && ts_right < support_end) {
+            kick_x_right = kickX_right_val;
+            kick_y_right = kickY_right_val;
+        }
+
+
+        FootController::Pose leftPose={
+        offsetZ_left-leftPosXY.y - kick_y_left,-Spac,-leftPosXY.x + offsetX_left + kick_x_left,
+        0, 0, 0
+        };
+
+        FootController::Pose rightPose={
+        offsetZ_right-rightPosXY.y - kick_y_right,+Spac,-rightPosXY.x + offsetX_right + kick_x_right,
+        0, 0, 0
+        };
+
+        // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+        leftFoot.setTargetPose(leftPose);
+        rightFoot.setTargetPose(rightPose);
+
+        // 指定FPS間隔の同期・待機処理
+        framelim.sync();
+    }
+
+    return;
+}
+
+void endWalking(GaitParameters &param_p){//歩行状態から静止状態へ移行
+    FrameLimiter framelim;
+
+    // 歩行パラメータで指定されたFPSに設定
+    framelim.setInterval(1000 / param_p.Fps);
+
+    float T = param_p.T*0.70;
+    float h = param_p.h*0.5;
+    float DutyX = param_p.DutyX;
+    float DutyY = param_p.DutyY;
+    int Fps = param_p.Fps;
+    int Spac = param_p.Spac;
+
+    float offsetZ_left = param_p.offsetZ_left;
+    float offsetX_left = param_p.offsetX_left;
+    float offsetZ_right = param_p.offsetZ_right;
+    float offsetX_right = param_p.offsetX_right;
+
+    float kickX_left_val = param_p.kickX_left*0;
+    float kickY_left_val = param_p.kickY_left*0;
+    float kickX_right_val = param_p.kickX_right*0;
+    float kickY_right_val = param_p.kickY_right*0;
+    float push_window = param_p.kickTime;
+
+    // 1周期あたりの総フレーム数
+    int totalFrames = Fps * T;
+
+    leftFoot.FootMotorInvert(1,1,1,-1,1);
+    rightFoot.FootMotorInvert(1,1,1,1,-1);
+    for (int frame = 0; frame < totalFrames; frame++) {
+        // 経過時間 ts の計算 (秒)
+        float ts_left = (float)frame / Fps;
+        // 右足は位相を半周期 (T / 2.0) ずらす
+        float ts_right = fmod(ts_left + (T / 2.0f), T);
+
+        float Wd = map(totalFrames-frame,0,totalFrames,0,(int)param_p.Wd);//推移していく。
+
+        // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+        Vector2 leftPosXY = leftFoot.tread(h,Wd,DutyX,DutyY,T,ts_left);
+        
+        Vector2 rightPosXY = rightFoot.tread(h,Wd,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+
+        float kick_x_left = 0.0f;
+        float kick_y_left = 0.0f;
+        float kick_x_right = 0.0f;
+        float kick_y_right = 0.0f;
+
+        // 接地期の終盤で後ろ・下へ押し込む
+        float support_end = DutyX * T / 2.0f;
+
+        if (ts_left > (support_end - push_window) && ts_left < support_end) {
+            kick_x_left = kickX_left_val;
+            kick_y_left = kickY_left_val;
+        }
+
+        if (ts_right > (support_end - push_window) && ts_right < support_end) {
+            kick_x_right = kickX_right_val;
+            kick_y_right = kickY_right_val;
+        }
+
+
+        FootController::Pose leftPose={
+        offsetZ_left-leftPosXY.y - kick_y_left,-Spac,-leftPosXY.x + offsetX_left + kick_x_left,
+        0, 0, 0
+        };
+
+        FootController::Pose rightPose={
+        offsetZ_right-rightPosXY.y - kick_y_right,+Spac,-rightPosXY.x + offsetX_right + kick_x_right,
+        0, 0, 0
+        };
+
+        // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+        leftFoot.setTargetPose(leftPose);
+        rightFoot.setTargetPose(rightPose);
+
+        // 指定FPS間隔の同期・待機処理
+        framelim.sync();
+    }
+
+    return;
+}
 
 void motion::walk::walk1() {
     Serial.printf("walk!\n");
-
     FrameLimiter framelim;
-
     GaitParameters &param_p = Config::MV_X_PARAM_2;
+
+    startWalking(param_p);
 
     // 歩行パラメータで指定されたFPSに設定
     framelim.setInterval(1000 / param_p.Fps);
@@ -54,10 +223,17 @@ void motion::walk::walk1() {
             // 右足は位相を半周期 (T / 2.0) ずらす
             float ts_right = fmod(ts_left + (T / 2.0f), T);
 
+
+            int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
+
+            float wd_def = 30.0 * stick_lx / 100.0;
+
+            float wd_left = Wd + wd_def;
+            float wd_right = Wd - wd_def;
+
             // 軌道生成処理 (FootController.cpp の tread 関数を利用)
-            Vector2 leftPosXY = leftFoot.tread(h,Wd,DutyX,DutyY,T,ts_left);
-            
-            Vector2 rightPosXY = rightFoot.tread(h,Wd,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+            Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
+            Vector2 rightPosXY = rightFoot.tread(h,wd_right,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
 
             float kick_x_left = 0.0f;
             float kick_y_left = 0.0f;
@@ -100,9 +276,9 @@ void motion::walk::walk1() {
         }
         nextTask = taskManager(1);
     }
+    endWalking(param_p);
     return;
 }
-
 
 // 1次元の目標角度を計算する関数（全ステップ管理版）
 float calculateStepMotion(float start_angle, float target_angle, int current_step, int total_steps) {
@@ -121,8 +297,13 @@ float calculateStepMotion(float start_angle, float target_angle, int current_ste
     return start_angle + (target_angle - start_angle) * smooth_t;
 }
 
+void motion::posture::hip_NB(){
+    float stick_rx = map_controller(Dualshock4.data.analog.stick.rx,20,-128,127,-30,30);
+    ServoArray[0]->setPosDeg(stick_rx);
+    delay(1);
+}
 
-void motion::posture::taunt(){//弱攻撃
+void motion::posture::taunt(){
     Serial.printf("taunt 立ち姿勢!\n");
     for(int i=0;i<19;i++){
         ServoArray[i]->setPosDeg(0);
@@ -133,6 +314,8 @@ void motion::posture::taunt(){//弱攻撃
 
 void motion::posture::battle::attack_Light_1(){//弱攻撃
     Serial.printf("attack_Light_1!\n");
+    VIB();//バイブレーション
+
     float armAngle_zero[4]={0,70,33,-130};//rightArmJ1~rightArmJ4 ServoArray[5]~ServoArray[8]
     float armAngle_tar[4]={-14,73,-55.8,-43.6};
 
@@ -167,6 +350,9 @@ void motion::posture::battle::attack_Light_1(){//弱攻撃
 
 void motion::posture::battle::attack_Light_2(){
     Serial.printf("attack_Light_2!\n");
+
+    VIB();//バイブレーション
+
     float armAngle_zero[4]={4,80,-16,-130};//leftArmJ1~leftArmJ4 ServoArray[1]~ServoArray[4]
     float armAngle_tar[4]={5,43,75,-14};
 
@@ -200,6 +386,9 @@ void motion::posture::battle::attack_Light_2(){
 
 void motion::posture::battle::attack_Medium_1(){//中攻撃
     Serial.printf("attack2!\n");
+
+    VIB();//バイブレーション
+
     float armAngle_zero[4]={4,80,-16,-130};//leftArmJ1~leftArmJ4 ServoArray[1]~ServoArray[4]
     float armAngle_tar1[4]={-13,41,-26,-71};
     float armAngle_tar2[4]={50,50,76,-18};
@@ -246,6 +435,9 @@ void motion::posture::battle::attack_Medium_1(){//中攻撃
 
 void motion::posture::battle::attack_Medium_2(){
     Serial.printf("attack_Medium_2!\n");
+
+    VIB();//バイブレーション
+
     float armAngle_zero[4]={0,70,33,-130};//ServoArray[5]~ServoArray[8]
     float armAngle_tar1[4]={-2.8,90.7,-7.8,-113.9};
     float armAngle_tar2[4]={-19,87,3.4,-100};
@@ -290,13 +482,15 @@ void motion::posture::battle::attack_Medium_2(){
     nextTask = taskManager(1);
 }
 
-
 void motion::posture::battle::attack_Heavy_1(){
     nextTask = taskManager(1);
 }
 
 void motion::posture::battle::attack_Heavy_2(){
     Serial.printf("attack_Heavy_2!\n");
+
+    VIB();//バイブレーション
+
     float armAngle_zero[8]={4,80,-16,-130,0,70,33,-130};//ServoArray[1]~ServoArray[8]
     float armAngle_tar1[8]={75,69,4,-100,0,24,-166,-70};
     float armAngle_tar2[8]={-9,94,24,-70,22,31,-72,-43};
@@ -341,16 +535,11 @@ void motion::posture::battle::attack_Heavy_2(){
     nextTask = taskManager(1);
 }
 
-
-
-
 void motion::posture::nop(){
     Serial.printf("nop!\n");
     nextTask = taskManager(1);
     delay(10);
 }
-
-
 
 void motion::posture::DebugMode(){
     Serial.printf("DebugMode! comand!\n");
