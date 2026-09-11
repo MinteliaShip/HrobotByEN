@@ -3,7 +3,7 @@
 
 bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,float *armAngle_zero,float *armAngle_tar1);
 
-void VIB(){
+void VIB(){//バイブレーション＆赤LED
     Dualshock4.setLed(255, 10, 10);
     Dualshock4.setRumble(255, 0);
     Dualshock4.sendToController();
@@ -21,10 +21,6 @@ float phaseShift_f(float inStep,float phaseShift){
     return result;
 }
 
-//    FrameLimiter framelim;
-//        framelim.setInterval(1000 / param_p.Fps);
-//        // 指定FPS間隔の同期・待機処理
-//framelim.sync();
 bool startWalking(GaitParameters &param_p){//静止状態から歩行状態への移行
 // 毎フレーム定義・計算する変数（ローカル変数）
     float T = param_p.T * 0.90f;

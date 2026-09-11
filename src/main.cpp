@@ -5,30 +5,7 @@
 #include "ConfigDef.h"
 #include "Vector.h"
 #include "Motion.h"
-#include "frameData.h"
 
-
-
-/*　*/
-//デバッグ用関数　コマンド
-//毎ループ推奨
-//コマンド内容
-//・task　：タスク関連
-//オプション
-//task      ：実行中タスクを表示
-//task -s   ：次回タスクの設定
-//task -s -n：緊急ですぐに実行するタスクを設定
-
-
-//(検討)
-
-/*  */
-//using NextTaskType = void (*)();
-//引数  ：canDelegateTask＝通常タスクの判定をスキップする。しかし、緊急タスクの判定はある。
-//返り値：次に実行すべきタスクを帰す。
-//
-//移行許可ありで判定なし（操作なしや緊急動作なし）の場合、なにもしないnopを帰す。   
-//移行許可なしで判定なしの場合は、nullptrを帰す。
 
 void taskManager();
 
