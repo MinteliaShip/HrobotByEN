@@ -1,11 +1,17 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include "ConfigDef.h"
 #include <Arduino.h>
-#include "FootController.h"
-#include "controller_to_command.h"
-
-
+/**********************************************/
+//基本設定
+extern int serialPC_bps;
+extern int serialServo_bps;
+extern int txPin;
+extern int rxPin;
+extern int enPin;
+/**********************************************/
+extern const int stretch;
 
 struct GaitParameters {
   float T;
@@ -15,128 +21,80 @@ struct GaitParameters {
   float DutyY;
   int Fps;
   float Spac;
-  GaitParameters(float T_, float h_, float Wd_, float DutyX_, float DutyY_, int Fps_, float Spac_) : T(T_), h(h_), Wd(Wd_), DutyX(DutyX_), DutyY(DutyY_), Fps(Fps_), Spac(Spac_) {}
+  float offsetZ_left;
+  float offsetX_left;
+  float offsetZ_right;
+  float offsetX_right;
+  float kickX_left;
+  float kickY_left;
+  float kickX_right;
+  float kickY_right;
+  float kickTime;
 };
 
 
 namespace Config {
     //コントローラのMACアドレス
-    const char ControllerMac[18] = "06:02:01:02:05:10";
+    extern const char ControllerMac[18];
 
     //PCとの通信のボートレート
-    const long bpsPC = 115200;
+    extern const long bpsPC;
 
     //サーボとの通信設定
-    #ifdef SIMULATION
-    HardwareSerial* ServoSerial = &Serial;
-    #else
-    HardwareSerial* ServoSerial = &Serial1;
-    #endif
-    const char enPin = 23;
-    const char txPin = 19;
-    const char rxPin = 22;
-    const long bpsServo = 115200;
+    extern HardwareSerial* ServoSerial;
 
-    const char hipServoID = 11;
+    extern const char enPin;
+    extern const char txPin;
+    extern const char rxPin;
+    extern const long bpsServo;
+
+    extern const char hipServoID;
 
     //足寸法
-    FootController::leng8 lengs8={18.75,49,20.96,150.04,150.04,20.96,49,18.75};
-    FootController::IcsServoConfig rightfootConfig{
-    9,
-    12,
-    13,
-    14,
-    15,
-    enPin,
-    ServoSerial
-    };
-
-    FootController::IcsServoConfig leftfootConfig{
-    10,
-    16,
-    17,
-    18,
-    19,
-    enPin,
-    ServoSerial
-    };
+    extern float lengs8[8];
 
     //歩行軌道のパラメータ
-    GaitParameters MV_X_PARAM(
-    0.7,    //T
-    40,     //h
-    120,    //Wd
-    0.8,    //DutyX
-    0.8,     //DutyY
-    40,     //Fps
-    50.0    //Spac
-    );
+    extern GaitParameters MV_X_PARAM;
+    extern GaitParameters MV_X_PARAM_2;
+    extern GaitParameters MV_X_PARAM_3;
+    extern GaitParameters MV_X_PARAM_TEST;
+    extern GaitParameters MV_X_PARAM_TURN;
 
-    GaitParameters MV_FREE_PARAM(
-    1.0,    //T
-    60,     //h
-    100,    //Wd
-    0.6,    //DutyX
-    0.65,     //DutyY
-    30,     //Fps
-    20.0    //Spac
-    );
+    extern GaitParameters MV_X_PARAM_1Y;
 
+    extern GaitParameters MV_FREE_PARAM;
 
-    GaitParameters MV_Y_PARAM(
-    0.7,    //T
-    40,     //h
-    120,    //Wd
-    0.8,    //DutyX
-    0.8,     //DutyY
-    40,     //Fps
-    50.0    //Spac
-    );
+    extern GaitParameters MV_Y_PARAM;
 
-    int IDEL_FPS = 10;
-    float IDLE_SPAC = 50.0;
+    extern int IDEL_FPS;
+    extern float IDLE_SPAC;
 
-    const int MotionFPS = 10;
+    extern const int MotionFPS;
 
-    char leftArmJ1ID = 1;
-    char leftArmJ2ID = 3;
-    char leftArmJ3ID = 4;
-    char leftArmJ4ID = 5;
+    extern char leftFootJ1ID;
+    extern char leftFootJ2ID;
+    extern char leftFootJ3ID;
+    extern char leftFootJ4ID;
+    extern char leftFootJ5ID;
 
-    char rightArmJ1ID = 2;
-    char rightArmJ2ID = 6;
-    char rightArmJ3ID = 7;
-    char rightArmJ4ID = 8;
+    extern char rightFootJ1ID;
+    extern char rightFootJ2ID;
+    extern char rightFootJ3ID;
+    extern char rightFootJ4ID;
+    extern char rightFootJ5ID;
 
-    const int TAUNT_FPS = 30;
-    const float TAUNT_SPAC = 50.0;
+    extern char leftArmJ1ID;
+    extern char leftArmJ2ID;
+    extern char leftArmJ3ID;
+    extern char leftArmJ4ID;
 
+    extern char rightArmJ1ID;
+    extern char rightArmJ2ID;
+    extern char rightArmJ3ID;
+    extern char rightArmJ4ID;
 
-
-    ControllerApp::controllerMapping mapping(
-        ControllerApp::BTN_L1,          //ATC1
-        ControllerApp::BTN_L2,          //ATC2
-        ControllerApp::BTN_R1,          //ATC3
-        ControllerApp::BTN_R2,          //ATC4
-
-        ControllerApp::BTN_SHARE,       //SP1
-        ControllerApp::BTN_OPTIONS,     //SP2
-
-        ControllerApp::BTN_UP,          //Getup
-        ControllerApp::BTN_DOWN,        //Squat
-        ControllerApp::BTN_TRIANGLE,    //Taunt
-
-        ControllerApp::BTN_TOUCHPAD,    //Ctrl
-
-        ControllerApp::ANALOG_LX,       //MoveX
-        ControllerApp::ANALOG_LY,       //MoveY
-
-        ControllerApp::ANALOG_RX,        //LookX
-        ControllerApp::ANALOG_RY,        //LookY
-        ControllerApp::ANALOG_L2,        //TriggerL
-        ControllerApp::ANALOG_R2        //TriggerR
-    );
-
+    extern const int TAUNT_FPS;
+    extern const float TAUNT_SPAC;
 
 }
 
