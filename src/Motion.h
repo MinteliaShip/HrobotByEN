@@ -7,6 +7,8 @@
 namespace motion{//モーション関数の置き場所
     namespace walk{
         bool walk1();
+        bool walkY();
+        bool turn();
     }
 
     namespace posture{
@@ -25,6 +27,7 @@ namespace motion{//モーション関数の置き場所
         bool pose();
         bool chair();   //椅子に座る
         bool kneeling();   //膝立ち
+        bool getUp();//起き上がり
 
         bool hip();//腰回転
     }

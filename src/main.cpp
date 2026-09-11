@@ -7,6 +7,8 @@
 #include "Motion.h"
 #include "frameData.h"
 
+
+
 /*　*/
 //デバッグ用関数　コマンド
 //毎ループ推奨
@@ -75,6 +77,8 @@ const uint32_t TOUCHPAD_BIT  = (1UL << 21);
 namespace activeMotion{//アクティブなモーションはtrueに。
     namespace walk{
         bool walk1;
+        bool walkY;
+        bool turn;
     }
 
     namespace posture{
@@ -93,6 +97,7 @@ namespace activeMotion{//アクティブなモーションはtrueに。
         bool pose;
         bool chair;   //椅子に座る
         bool kneeling;   //膝立ち
+        bool getUp;
 
         bool hip;//腰回転
     }
@@ -144,14 +149,26 @@ void taskManager(){//タスク管理。
 
     uint32_t button_bits = 0;
     memcpy(&button_bits, &Dualshock4.data.button, sizeof(Dualshock4.data.button));
-    
+    ps4_button_t &ps4Button = Dualshock4.data.button;
+    Serial.println(busyPartsBit, BIN);
+
+    //起き上がり
+    runExclusiveTask(button_bits==TOUCHPAD_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::getUp,motion::posture::getUp);
+
     //腰回転
     runExclusiveTask(true,HIP_BIT,activeMotion::posture::hip,motion::posture::hip);
 
     //歩行モーション
     int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
-    Serial.printf("stick_lx:%d\n",stick_ly);
-    runExclusiveTask(button_bits == L3_BIT || (stick_ly > 0),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walk1,motion::walk::walk1);
+
+    //通常歩行
+    runExclusiveTask((stick_ly > 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walk1,motion::walk::walk1);
+
+    //横歩行
+    runExclusiveTask(ps4Button.right || ps4Button.left || ps4Button.up || ps4Button.down ,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkY,motion::walk::walkY);
+
+    //回転
+    runExclusiveTask(button_bits == L3_BIT,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::turn,motion::walk::turn);
 
     //単押しの攻撃モーション
     active += runExclusiveTask(button_bits == L1_BIT || (button_bits == (L1_BIT | R1_BIT)) || (button_bits == (L1_BIT | R2_BIT)),LEFT_ARM_BIT,activeMotion::posture::battle::attack_Light_left,motion::posture::battle::attack_Light_left);
@@ -160,6 +177,7 @@ void taskManager(){//タスク管理。
     active += runExclusiveTask(button_bits == R1_BIT || (button_bits == (L1_BIT | R1_BIT))|| (button_bits == (L2_BIT | R1_BIT)),RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Light_right,motion::posture::battle::attack_Light_right);
     active += runExclusiveTask(button_bits == R2_BIT || (button_bits == (L1_BIT | R2_BIT))|| (button_bits == (L2_BIT | R2_BIT)),RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Medium_right,motion::posture::battle::attack_Medium_right);
 
+    //攻撃モーションがない時に実行される。実質LEDを白色に戻す担当者
     runExclusiveTask(!active,0,activeMotion::posture::nop,motion::posture::nop);
 
     //姿勢を正す。 強制移行可能
@@ -201,13 +219,16 @@ void setup() {
         const float offsetDeg[10]={1.79,3.98,-2.13,-2.09,4.83,14.48,3.21,0.00,-7.56,4.96};
         for(int i=0;i<10;i++){
             ServoArray[i+9]->setOffsetDeg(offsetDeg[i]);
+            delay(5);
         }
         for(int i=0;i<19;i++){
-            ServoArray[i]->setStretch(90);
+            ServoArray[i]->setStretch(stretch);
+            delay(5);
         }
         ServoArray[13]->setStretch(1);
+        delay(5);
         ServoArray[18]->setStretch(1);
-
+        delay(5);
         ServoArray[0]->setSkip(true);
     #endif
 

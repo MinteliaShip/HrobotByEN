@@ -9,7 +9,7 @@ int rxPin = 22;
 int enPin = 23;
 /**********************************************/
 
-
+const int stretch = 90;
 
 //コントローラのMACアドレス
 const char Config::ControllerMac[18] = "06:02:01:02:05:10";
@@ -53,6 +53,44 @@ GaitParameters Config::MV_X_PARAM{
     0.3f     // kickTime
 };
 
+GaitParameters Config::MV_X_PARAM_1Y{
+    0.5,    //T
+    50,     //h
+    10,    //Wd
+    0.90,    //DutyX
+    0.85,    //DutyY
+    30,     //Fps
+    25,    //Spac
+    307.0f,  // offsetZ_left
+    -18.0f,  // offsetX_left
+    300.0f,  // offsetZ_right
+    -18.0f,  // offsetX_right
+    -0.0f,   // kickX_left
+    -10.0f,   // kickY_left
+    -0.0f,   // kickX_right
+    -10.0f,   // kickY_right
+    0.2f     // kickTime
+};
+
+GaitParameters Config::MV_X_PARAM_TURN{
+    0.7,    //T
+    20,     //h
+    50,    //Wd
+    0.90,    //DutyX
+    0.85,    //DutyY
+    30,     //Fps
+    25,    //Spac
+    304.0f,  // offsetZ_left
+    -18.0f,  // offsetX_left
+    300.0f,  // offsetZ_right
+    -18.0f,  // offsetX_right
+    -0.0f,   // kickX_left
+    -2.0f,   // kickY_left
+    -0.0f,   // kickX_right
+    -2.0f,   // kickY_right
+    0.2f     // kickTime
+};
+
 GaitParameters Config::MV_X_PARAM_2{
     0.9,     // T
     52,      // h
@@ -74,7 +112,7 @@ GaitParameters Config::MV_X_PARAM_2{
 
 
 GaitParameters Config::MV_X_PARAM_3{
-    1.0,     // T
+    0.9,     // T
     50,      // h
     80,      // Wd
     0.95,    // DutyX
