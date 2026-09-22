@@ -193,7 +193,7 @@ void setup() {
     listFiles();//保存データを一覧表示
 
     #ifndef SIMULATION
-        const float offsetDeg[10]={1.79,3.98,-2.13,-2.09,4.83,14.48,3.21,0.00,-7.56,4.96};
+        const float offsetDeg[10]={-0.13,1.11,-4.39,3.00,2.26,15.76,1.59,2.63,-6.21,20.00};//-1.485001
         for(int i=0;i<10;i++){
             ServoArray[i+9]->setOffsetDeg(offsetDeg[i]);
             delay(5);
@@ -202,9 +202,9 @@ void setup() {
             ServoArray[i]->setStretch(stretch);
             delay(5);
         }
-        ServoArray[13]->setStretch(1);
+        ServoArray[13]->setStretch(10);
         delay(5);
-        ServoArray[18]->setStretch(1);
+        ServoArray[18]->setStretch(10);
         delay(5);
         ServoArray[0]->setSkip(true);
     #endif

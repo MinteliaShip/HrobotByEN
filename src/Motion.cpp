@@ -23,8 +23,8 @@ float phaseShift_f(float inStep,float phaseShift){
 
 bool startWalking(GaitParameters &param_p){//静止状態から歩行状態への移行
 // 毎フレーム定義・計算する変数（ローカル変数）
-    float T = param_p.T * 0.90f;
-    float h = param_p.h * 0.5f;
+    float T = param_p.T * 1.00f;
+    float h = param_p.h * 0.4f;
     float DutyX = param_p.DutyX;
     float DutyY = param_p.DutyY;
     int Fps = param_p.Fps;
@@ -119,8 +119,8 @@ bool startWalking(GaitParameters &param_p){//静止状態から歩行状態へ�
 
 bool endWalking(GaitParameters &param_p) {//歩行状態から静止状態へ移行
     // 毎フレーム定義・計算する変数（ローカル変数）
-    float T = param_p.T * 0.70f;
-    float h = param_p.h * 0.5f;
+    float T = param_p.T * 1.0f;
+    float h = param_p.h * 0.4f;
     float DutyX = param_p.DutyX;
     float DutyY = param_p.DutyY;
     int Fps = param_p.Fps;
@@ -229,10 +229,10 @@ bool motion::walk::walk1() {
     float offsetZ_right = param_p.offsetZ_right;
     float offsetX_right = param_p.offsetX_right;
 
-    float kickX_left_val = param_p.kickX_left * 0.0f;
-    float kickY_left_val = param_p.kickY_left * 0.0f;
-    float kickX_right_val = param_p.kickX_right * 0.0f;
-    float kickY_right_val = param_p.kickY_right * 0.0f;
+    float kickX_left_val = param_p.kickX_left;
+    float kickY_left_val = param_p.kickY_left;
+    float kickX_right_val = param_p.kickX_right;
+    float kickY_right_val = param_p.kickY_right;
     float push_window = param_p.kickTime;
 
     int totalFrames = (int)(T * Fps);
@@ -244,8 +244,12 @@ bool motion::walk::walk1() {
     switch (taskPhase){
         case 0:
         {
-            leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-            rightFoot.FootMotorInvert(1, 1, 1, 1, -1);
+            for(int i=0;i<19;i++){
+                ServoArray[i]->setStretch(stretch);
+                delay(5);
+            }
+            leftFoot.FootMotorInvert(1, 1, 1, -1, -1);
+            rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
 
             taskPhase = 1;
             break;
@@ -265,9 +269,9 @@ bool motion::walk::walk1() {
 
             int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
 
-            float wd_def = (Wd*0.5) * stick_lx / 100.0;
+            float wd_def = (Wd*0.0) * stick_lx / 100.0;
             float offsetY_def =1 * stick_lx / 100.0;
-            float angle_def = (15*PI/360.0)*stick_lx / 100.0;
+            float angle_def = (0*PI/360.0)*stick_lx / 100.0;
 
             float wd_left = Wd + wd_def;
             float wd_right = Wd - wd_def;
