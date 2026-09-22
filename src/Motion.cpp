@@ -369,6 +369,8 @@ bool motion::walk::walkY(){
 
     int totalFrames = (int)(T * Fps);
 
+    int moveValue;
+
     // 状態を維持する必要がある変数のみ static にする
     static int taskPhase = 0;
     static int frame = 0;
@@ -384,6 +386,7 @@ bool motion::walk::walkY(){
             rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
 
             taskPhase = 1;
+            moveValue = 0;
             break;
         }
         case 1:
@@ -399,8 +402,19 @@ bool motion::walk::walkY(){
             // 右足は位相を半周期 (T / 2.0) ずらす
             float ts_right = fmod(ts_left + (T / 2.0f), T);
 
-            float wd_left = Wd;
-            float wd_right = Wd;
+
+            
+            moveValue = moveValue + (-Dualshock4.data.button.left + Dualshock4.data.button.right)*0.1;
+            if(moveValue > 1){
+                moveValue = 1;
+            }else if(moveValue < -1){
+                moveValue = -1;
+            }
+
+            Serial.printf("moveValue:%d\n",moveValue);
+
+            float wd_left = Wd*moveValue;
+            float wd_right = Wd*moveValue;
 
             // 軌道生成処理 (FootController.cpp の tread 関数を利用)
             Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
@@ -432,12 +446,12 @@ bool motion::walk::walkY(){
             }
 
             FootController::Pose leftPose={
-            offsetZ_left-leftPosXY.y - kick_y_left,-Spac-leftPosXY.x  + kick_x_left ,0 + offsetX_left,
+            offsetZ_left-leftPosXY.y - kick_y_left,-Spac-leftPosXY.x  + kick_x_left*moveValue ,0 + offsetX_left,
             angle_left, 0, 0
             };
 
             FootController::Pose rightPose={
-            offsetZ_right-rightPosXY.y - kick_y_right,+Spac-rightPosXY.x + kick_x_right,0 + offsetX_right,
+            offsetZ_right-rightPosXY.y - kick_y_right,+Spac-rightPosXY.x + kick_x_right*moveValue,0 + offsetX_right,
             angle_right, 0, 0
             };
 
