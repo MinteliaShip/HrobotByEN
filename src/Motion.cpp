@@ -361,10 +361,10 @@ bool motion::walk::walkY(){
     float offsetZ_right = param_p.offsetZ_right;
     float offsetX_right = param_p.offsetX_right;
 
-    float kickX_left_val = param_p.kickX_left * 0.0f;
-    float kickY_left_val = param_p.kickY_left * 0.0f;
-    float kickX_right_val = param_p.kickX_right * 0.0f;
-    float kickY_right_val = param_p.kickY_right * 0.0f;
+    float kickX_left_val = param_p.kickX_left;
+    float kickY_left_val = param_p.kickY_left;
+    float kickX_right_val = param_p.kickX_right;
+    float kickY_right_val = param_p.kickY_right;
     float push_window = param_p.kickTime;
 
     int totalFrames = (int)(T * Fps);
@@ -376,8 +376,13 @@ bool motion::walk::walkY(){
     switch (taskPhase){
         case 0:
         {
-            leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-            rightFoot.FootMotorInvert(1, 1, 1, 1, -1);
+            for(int i=0;i<19;i++){
+                ServoArray[i]->setStretch(stretch);
+                delay(5);
+            }
+            leftFoot.FootMotorInvert(1, 1, 1, -1, -1);
+            rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
+
             taskPhase = 1;
             break;
         }
@@ -394,29 +399,8 @@ bool motion::walk::walkY(){
             // 右足は位相を半周期 (T / 2.0) ずらす
             float ts_right = fmod(ts_left + (T / 2.0f), T);
 
-
-            float buton_lx = 0;
-
-            if(Dualshock4.data.button.left & Dualshock4.data.button.right){
-                //nop
-            }else if(Dualshock4.data.button.left){
-                buton_lx = 100;
-            }else if(Dualshock4.data.button.right){
-                buton_lx = -100;
-            }else if(Dualshock4.data.button.up || Dualshock4.data.button.down){
-                //nop
-            }else{//終了へ
-                taskPhase = 3;
-                frame = 0;
-                break;
-            }
-
-            float space_def =15 * buton_lx / 100.0;
-            float offsetY_def =20 * buton_lx / 100.0;
-            float angle_def = (5*PI/360.0)*buton_lx / 100.0;
-
-            float wd_left = Wd*buton_lx / 100.0;
-            float wd_right = Wd* buton_lx / 100.0;
+            float wd_left = Wd;
+            float wd_right = Wd;
 
             // 軌道生成処理 (FootController.cpp の tread 関数を利用)
             Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
@@ -432,27 +416,28 @@ bool motion::walk::walkY(){
 
             // 接地期の終盤で後ろ・下へ押し込む
             float support_end = DutyX * T / 2.0f;
+            
+            float angle_def = 0;
 
             if (ts_left > (support_end - push_window) && ts_left < support_end) {
-                kick_x_left = kickX_left_val - offsetY_def;
-                kick_y_left = kickY_left_val + offsetY_def;
+                kick_x_left = kickX_left_val - 0;
+                kick_y_left = kickY_left_val + 0;
                 angle_left = angle_def;
             }
 
             if (ts_right > (support_end - push_window) && ts_right < support_end) {
-                kick_x_right = kickX_right_val - offsetY_def;
-                kick_y_right = kickY_right_val + offsetY_def;
+                kick_x_right = kickX_right_val - 0;
+                kick_y_right = kickY_right_val + 0;
                 angle_right = angle_def;
             }
 
-            //ここで、横移動用に書き換える。
             FootController::Pose leftPose={
-            offsetZ_left-leftPosXY.y - kick_y_left,-Spac -leftPosXY.x  + kick_x_left + space_def,offsetX_left,
+            offsetZ_left-leftPosXY.y - kick_y_left,-Spac-leftPosXY.x  + kick_x_left ,0 + offsetX_left,
             angle_left, 0, 0
             };
 
             FootController::Pose rightPose={
-            offsetZ_right-rightPosXY.y - kick_y_right,+Spac -rightPosXY.x + kick_x_right + space_def,offsetX_right,
+            offsetZ_right-rightPosXY.y - kick_y_right,+Spac-rightPosXY.x + kick_x_right,0 + offsetX_right,
             angle_right, 0, 0
             };
 
@@ -465,6 +450,13 @@ bool motion::walk::walkY(){
             }else{
                 frame = 0;
             }
+
+            int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
+            //行進のコントローラがない場合、または、回転のボタンが押された場合は抜ける。 
+            if((!Dualshock4.data.button.left && !Dualshock4.data.button.right) && (frame>=totalFrames)){//最終フレームで抜けるように
+                taskPhase = 3;
+                frame = 0;
+            }
             break;
         }        
         case 3:
@@ -472,10 +464,6 @@ bool motion::walk::walkY(){
             //歩行準備
             if(!endWalking(param_p)){
                 taskPhase = 0;
-                for(int i=0;i<19;i++){
-                    ServoArray[i]->setStretch(stretch);
-                    delay(1);
-                }
                 return false;//終了時は、falseを返す
             }
         }
