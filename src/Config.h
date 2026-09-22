@@ -12,6 +12,7 @@ extern int rxPin;
 extern int enPin;
 /**********************************************/
 extern const int stretch;
+extern int G_fps;
 
 struct GaitParameters {
   float T;

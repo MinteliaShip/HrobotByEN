@@ -24,7 +24,6 @@ float phaseShift_f(float inStep,float phaseShift){
 bool startWalking(GaitParameters &param_p){//静止状態から歩行状態への移行
 // 毎フレーム定義・計算する変数（ローカル変数）
     float T = param_p.T * 1.00f;
-    float h = param_p.h * 0.4f;
     float DutyX = param_p.DutyX;
     float DutyY = param_p.DutyY;
     int Fps = param_p.Fps;
@@ -64,6 +63,7 @@ bool startWalking(GaitParameters &param_p){//静止状態から歩行状態へ�
             float ts_right = phaseShift_f(ts_left,T/2.0);
 
             float Wd = map(frame,0,totalFrames,0,(int)param_p.Wd);//推移していく。
+            float h = map(frame,0,totalFrames,0,(int)param_p.h);//推移していく。
 
             // 軌道生成処理 (FootController.cpp の tread 関数を利用)
             Vector2 leftPosXY = leftFoot.tread(h,Wd,DutyX,DutyY,T,ts_left);
@@ -120,7 +120,7 @@ bool startWalking(GaitParameters &param_p){//静止状態から歩行状態へ�
 bool endWalking(GaitParameters &param_p) {//歩行状態から静止状態へ移行
     // 毎フレーム定義・計算する変数（ローカル変数）
     float T = param_p.T * 1.0f;
-    float h = param_p.h * 0.4f;
+    //float h = param_p.h * 0.4f;
     float DutyX = param_p.DutyX;
     float DutyY = param_p.DutyY;
     int Fps = param_p.Fps;
@@ -161,6 +161,7 @@ bool endWalking(GaitParameters &param_p) {//歩行状態から静止状態へ移
 
             // 終了へ向かうため、Wdを逆向きに減衰させる
             float Wd = map(totalFrames - frame, 0, totalFrames, 0, (int)param_p.Wd);
+            float h = map(totalFrames - frame, 0, totalFrames, 0, (int)param_p.h);
 
             // 軌道生成処理 (FootController.cpp の tread 関数を利用)
             Vector2 leftPosXY = leftFoot.tread(h, Wd, DutyX, DutyY, T, ts_left);
@@ -325,7 +326,7 @@ bool motion::walk::walk1() {
 
             int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
             //行進のコントローラがない場合、または、回転のボタンが押された場合は抜ける。 
-            if(!(stick_ly > 0) || Dualshock4.data.button.l3){
+            if((!(stick_ly > 0) || Dualshock4.data.button.l3) && (frame>=totalFrames)){//最終フレームで抜けるように
                 taskPhase = 3;
                 frame = 0;
             }

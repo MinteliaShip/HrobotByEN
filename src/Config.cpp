@@ -10,6 +10,7 @@ int enPin = 23;
 /**********************************************/
 
 const int stretch = 100;
+int G_fps = 40;
 
 //コントローラのMACアドレス
 const char Config::ControllerMac[18] = "06:02:01:02:05:10";
@@ -114,12 +115,12 @@ GaitParameters Config::MV_X_PARAM_2{
 
 
 GaitParameters Config::MV_X_PARAM_3{
-    1.5,     // T
-    25,      // h
+    1.0,     // T
+    30,      // h
     60,      // Wd
-    0.95,    // DutyX
-    0.90,    // DutyY
-    40,      // Fps
+    0.90,    // DutyX
+    0.85,    // DutyY
+    G_fps,      // Fps
     20,      // Spac
     310.0f,  // offsetZ_left
     -15.0f,  // offsetX_left
@@ -129,7 +130,7 @@ GaitParameters Config::MV_X_PARAM_3{
     -8.0f,   // kickY_left
     -0.0f,   // kickX_right
     -8.0f,   // kickY_right
-    0.1f     // kickTime
+    0.15f     // kickTime
 };
 
 

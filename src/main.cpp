@@ -212,7 +212,7 @@ void setup() {
     Dualshock4.setLed(255, 0, 0);
     Dualshock4.sendToController();
 
-    framelim.setInterval(1000 / 40);
+    framelim.setInterval(1000 / G_fps);
 
 
 }
