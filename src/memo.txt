@@ -1,7 +1,7 @@
 #include "Motion.h"
 #include "ConfigDef.h"
 
-bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,const float *armAngle_zero,const float *armAngle_tar1);
+bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,float *armAngle_zero,float *armAngle_tar1);
 
 void VIB(){//バイブレーション＆赤LED
     Dualshock4.setLed(255, 10, 10);
@@ -270,9 +270,9 @@ bool motion::walk::walk1() {
 
             int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
 
-            float wd_def = (Wd*0.9) * stick_lx / 100.0;
+            float wd_def = (Wd*0.0) * stick_lx / 100.0;
             float offsetY_def =1 * stick_lx / 100.0;
-            float angle_def = (1*PI/360.0)*stick_lx / 100.0;
+            float angle_def = (0*PI/360.0)*stick_lx / 100.0;
 
             float wd_left = Wd + wd_def;
             float wd_right = Wd - wd_def;
@@ -1046,71 +1046,116 @@ bool motion::posture::getUp_prone(){
     return true;
 }
 
-bool motion::posture::getUp_supine() {
+bool motion::posture::getUp_supine(){
+    // 状態を維持する必要がある変数のみ static にする
     static int taskPhase = 0;
-    static int currentStep = 0;
-    static int arrIndex = 0;
+    static int currentStep=0;
 
-    // モーション構造体定義
-    struct MotionStep {
-        int frameNum;
-        float pose[19];
-    };
 
-    // PROGMEM配置（関数呼び出し間で保持するため static const を付与）
-    static const MotionStep motionData[] PROGMEM = {
-        /* 0: posZero   */ {30, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
-        /* 1: posSupine */ {30, {0.00, -71.42, 100.95, 58.42, -90.82, 61.66, 90.45, -51.30, -85.22, 2.77, -4.18, -8.30, -6.92, -4.25, 14.48, 5.80, -1.62, -0.44, 13.67}},
-        /*    支援      */ {25, {0.00,-4.86,102.53,35.98,-33.65,-3.14,91.70,-52.28,43.67,-3.14,-75.77,21.06,-96.73,-76.34,14.14,80.05,25.04,79.72,82.28}}, 
-        /* 2: posTar1   */ {25, {0.00, -56.40, 1.45, 9.25, -129.74, 32.30, -3.51, 9.25, -119.31, 23.93, -90.82, 22.07, -99.93, -84.04, 11.88, 91.33, 4.25, 90.04, 99.09}},
-        /* 3: posTar2   */ {25, {0.00, 35.98, 30.21, 46.37, 0.81, -19.81, 39.05, -57.81, 6.51, 3.41, -93.08, -11.58, -90.96, -84.04, 8.94, 91.97, -6.92, 80.02, 98.75}},
-        /* 4: posTar3   */ {120, {0.00, -75.60, 21.16, 28.15, -75.63, 29.67, 23.12, 31.39, -57.95, -11.47, -94.37, 37.66, -98.96, -93.01, 23.25, 92.61, 42.83, 84.27, 91.33}},
-        /* 5: posTar4   */ {120, {0.00, -25.41, 33.45, 9.59, 21.67, 4.93, 36.48, 22.61, -15.63, 2.77, -0.13, 75.84, -51.17, -1.62, 11.21, 30.37, 62.61, 49.34, 32.03}},
-        /* 6: posZero   */ { 0, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}}
-    };
-
-    const int arrNum = sizeof(motionData) / sizeof(motionData[0]);
-    const int index = 0;
-    const int joint_num = 19;
-
-    switch (taskPhase) {
-        case 0:
-            Serial.printf("getUp_supine!\n");
-            taskPhase = 10;
-            currentStep = 0;
-            arrIndex = 0;
-            break;
-
-        case 10:
-        {
-            // motion_sub 内で taskPhase++ されるのを防ぐためダミー変数を渡す
-            int dummyPhase = 0;
-
-            // 1ステップ分（1フレーム分）の補間・出力処理
-            bool isBusy = motion_sub(
-                motionData[arrIndex].frameNum,index,joint_num,currentStep,dummyPhase,motionData[arrIndex].pose,motionData[arrIndex + 1].pose
-            );
-
-            // currentStep が frameNum に達して motion_sub が false を返した場合（区間完了）
-            if (!isBusy) {
-                arrIndex++; // 次の姿勢ペアへ進める
-
-                // 全ての遷移（全 arrNum - 1 区間）が終わった場合
-                if (arrIndex >= arrNum - 1) {
-                    taskPhase = 11;
-                }
-            }
-            break;
-        }
-
-        case 11:
-            taskPhase = 0;
-            currentStep = 0;
-            arrIndex = 0;
-            return false; // モーション完了
+    //0 1 2 3 4 0
+    float Pos[][20]={
+        /*zero*/{20 , 0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-4.83,32.03,-25.01,-3.91,15.46,10.33,32.94,15.63,10.77},
+        /* 01 */{20 , 0.00,-71.42,100.95,58.42,-90.82,61.66,90.45,-51.30,-85.22,2.77,-4.18,-8.30,-6.92,-4.25,14.48,5.80,-1.62,-0.44,13.67},
+        /* 02 */{20 , 0.00,-56.40,1.45,9.25,-129.74,32.30,-3.51,9.25,-119.31,23.93,-90.82,22.07,-99.93,-84.04,11.88,91.33,4.25,90.04,99.09},
+        /* 03 */{20 , }
+        /* 04 */{20 , }
     }
 
-    return true; // モーション継続中
+
+    float posZero[19]={0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-4.83,32.03,-25.01,-3.91,15.46,10.33,32.94,15.63,10.77};
+    //仰向けに寝ている
+    float posSupine[19]={0.00,-71.42,100.95,58.42,-90.82,61.66,90.45,-51.30,-85.22,2.77,-4.18,-8.30,-6.92,-4.25,14.48,5.80,-1.62,-0.44,13.67};
+    
+    //仰向け　起き上がり準備
+    float posTar1[19]={0.00,-56.40,1.45,9.25,-129.74,32.30,-3.51,9.25,-119.31,23.93,-90.82,22.07,-99.93,-84.04,11.88,91.33,4.25,90.04,99.09};
+
+    //起き上がり　中
+    float posTar2[19]={0.00,35.98,30.21,46.37,0.81,-19.81,39.05,-57.81,6.51,3.41,-93.08,-11.58,-90.96,-84.04,8.94,91.97,-6.92,80.02,98.75};
+
+    //起き上がり　中2
+    float posTar2_5[19]={0,};
+
+    //起き上がり
+    float posTar3[19]={0.00,-75.60,21.16,28.15,-75.63,29.67,23.12,31.39,-57.95,-11.47,-94.37,37.66,-98.96,-93.01,23.25,92.61,42.83,84.27,91.33};
+
+    //立ち上がり中
+    float posTar4[19]={0.00,-25.41,33.45,9.59,21.67,4.93,36.48,22.61,-15.63,2.77,-0.13,75.84,-51.17,-1.62,11.21,30.37,62.61,49.34,32.03};
+
+    //足開脚＆、腕
+    //float posTar1[19]={0.00,-8.24,92.37,55.82,-114.24,-10.06,85.39,-51.94,-93.59,3.71,-91.80,-9.62,3.98,-85.32,6.65,90.35,0.00,-13.80,93.93};
+
+    //足開脚座り
+    //float posTar2[19]={0.00,1.76,88.90,39.86,-20.18,-5.64,89.17,-29.46,-0.64,-1.82,-94.37,-11.58,4.29,-87.58,9.92,92.61,-3.95,-13.80,93.59};
+
+    //
+    //float posTar3[19]={0.00,-2.16,93.96,55.18,42.86,-7.53,89.81,-41.18,30.95,10.90,-87.31,-19.41,-72.73,4.83,21.30,85.22,2.63,72.43,-4.69};
+
+    //float posTar4[19]={0.00,-2.16,93.96,55.18,42.86,-7.53,89.81,-41.18,30.95,10.90,-87.31,-19.41,-72.73,4.83,21.30,85.22,2.63,72.43,-4.69};
+
+    //腕だけ先行
+    //float posTar5[19]={0.00,-32.84,88.26,124.37,-41.55,12.52,87.28,-119.41,-34.49,10.90,-87.31,-19.41,-72.73,4.83,21.30,85.22,2.63,72.43,-4.69};
+    //float posTar6[19]={0.00,-32.84,88.26,124.37,-41.55,12.52,87.28,-119.41,-34.49,-18.80,-9.18,13.10,-89.37,-12.12,22.61,21.97,14.48,76.07,27.84};
+
+
+    int totalSteps=15;
+    float currentPos[19];
+
+    int index = 0;
+    int joint_num = 19; 
+
+    switch (taskPhase){
+        case 0:
+        {
+            Serial.printf("getUp_supine!\n");
+            taskPhase = 10;//最初のフレームは10から。
+            currentStep=0;
+
+            break;
+        }
+        case 10:
+        {
+            motion_sub(20,index,joint_num,currentStep,taskPhase,posZero,posSupine);
+            break;
+        }
+        case 11:
+        {
+            motion_sub(20,index,joint_num,currentStep,taskPhase,posSupine,posTar1);
+            break;
+        }
+        case 12:
+        {
+            motion_sub(20,index,joint_num,currentStep,taskPhase,posTar1,posTar2);
+            break;
+        }
+        case 13:
+        {
+            motion_sub(30,index,joint_num,currentStep,taskPhase,posTar2,posTar2_5);
+            break;
+        }
+        case 14:
+        {
+            motion_sub(30,index,joint_num,currentStep,taskPhase,posTar2_5,posTar3);
+            break;
+        }
+        case 15:
+        {
+            motion_sub(60,index,joint_num,currentStep,taskPhase,posTar3,posTar4);
+            break;
+        }
+        case 16:
+        {
+            motion_sub(50,index,joint_num,currentStep,taskPhase,posTar4,posZero);
+            break;
+        }
+        case 17:
+        {
+            taskPhase = 0;
+            currentStep=0;
+            return false;
+            break;
+        }
+    }
+    return true;
 }
 
 
@@ -1193,7 +1238,7 @@ bool motion::posture::kneeling() {
 }
 
 //教示によるモーション再生用の補助プログラム
-bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,const float *armAngle_zero,const float *armAngle_tar1){
+bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,float *armAngle_zero,float *armAngle_tar1){
     for(int i=0;i<joint_num;i++){
         float currentPos = calculateStepMotion(armAngle_zero[i], armAngle_tar1[i], currentStep, totalSteps);
         ServoArray[i+index]->setPosDeg(currentPos,false);

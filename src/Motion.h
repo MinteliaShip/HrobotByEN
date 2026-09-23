@@ -29,6 +29,9 @@ namespace motion{//モーション関数の置き場所
         bool kneeling();   //膝立ち
         bool getUp();//起き上がり
 
+        bool getUp_supine();//仰向け
+        bool getUp_prone();//うつ伏せ
+
         bool hip();//腰回転
     }
 }

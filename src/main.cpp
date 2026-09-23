@@ -23,6 +23,32 @@ void loop2_begin(){
     );
 }
 
+inline void checkMemoryUsage(unsigned long intervalMs = 1000) {
+    static unsigned long lastCheck = 0;
+    unsigned long now = millis();
+
+    // 指定インターバル（デフォルト1000ms）経過していない場合は即復帰（極小負荷）
+    if (now - lastCheck < intervalMs) {
+        return;
+    }
+    lastCheck = now;
+
+    uint32_t total = ESP.getHeapSize();
+    uint32_t free = ESP.getFreeHeap();
+    uint32_t minFree = ESP.getMinFreeHeap();
+    uint32_t used = total - free;
+    float usageRatio = ((float)used / (float)total) * 100.0f;
+
+    // 1行で要点をまとめた軽量シリアル出力
+    Serial.printf("[RAM] Used: %u B (%.1f%%) | Free: %u B | MinFree: %u B\n", 
+                  used, usageRatio, free, minFree);
+
+    // メモリ危険域（20KB以下）の警告
+    if (free < 20000) {
+        Serial.printf("[WARN] Critical Low RAM! Free: %u B\n", free);
+    }
+}
+
 const uint32_t RIGHT_BIT     = (1UL << 0);
 const uint32_t DOWN_BIT      = (1UL << 1);
 const uint32_t UP_BIT        = (1UL << 2);
@@ -75,6 +101,8 @@ namespace activeMotion{//アクティブなモーションはtrueに。
         bool chair;   //椅子に座る
         bool kneeling;   //膝立ち
         bool getUp;
+        bool getUp_supine;//仰向け
+        bool getUp_prone;//うつ伏せ
 
         bool hip;//腰回転
     }
@@ -219,6 +247,7 @@ void setup() {
 
 void loop() {
     taskManager();
+    checkMemoryUsage();
     framelim.sync();
 }
 

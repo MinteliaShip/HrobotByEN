@@ -2,14 +2,14 @@
 
 /**********************************************/
 //基本設定
-int serialPC_bps = 115200;
-int serialServo_bps = 115200;
-int txPin = 19;
-int rxPin = 22;
-int enPin = 23;
+const int serialPC_bps = 115200;
+const int serialServo_bps = 115200;
+const int txPin = 19;
+const int rxPin = 22;
+const int enPin = 23;
 /**********************************************/
 
-const int stretch = 100;
+const int stretch = 95;
 int G_fps = 40;
 
 //コントローラのMACアドレス
@@ -73,6 +73,25 @@ GaitParameters Config::MV_X_PARAM_1Y{
     0.15f     // kickTime
 };
 
+GaitParameters Config::MV_X_PARAM_FAST_Y{//遅い
+    0.3,     // T
+    25,      // h
+    -80,     // Wd
+    0.90,    // DutyX
+    0.85,    // DutyY
+    G_fps,   // Fps
+    40,      // Spac
+    300.0f,  // offsetZ_left
+    -25.0f,  // offsetX_left
+    310.0f,  // offsetZ_right
+    -25.0f,  // offsetX_right
+    -15.0f,   // kickX_left
+    -10.0f,   // kickY_left
+    -15.0f,   // kickX_right
+    -10.0f,   // kickY_right
+    0.1f     // kickTime
+};
+
 GaitParameters Config::MV_X_PARAM_TURN{
     0.7,    //T
     20,     //h
@@ -123,13 +142,13 @@ GaitParameters Config::MV_X_PARAM_3{
     G_fps,      // Fps
     20,      // Spac
     310.0f,  // offsetZ_left
-    -15.0f,  // offsetX_left
+    -13.0f,  // offsetX_left
     315.0f,  // offsetZ_right
-    -15.0f,  // offsetX_right
+    -13.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -8.0f,   // kickY_left
+    -9.0f,   // kickY_left
     -0.0f,   // kickX_right
-    -8.0f,   // kickY_right
+    -9.0f,   // kickY_right
     0.15f     // kickTime
 };
 
@@ -144,9 +163,9 @@ GaitParameters Config::MV_X_PARAM_TEST{
     10,     //Fps
     50.0,    //Spac
     323.0f,  // offsetZ_left
-    -15.0f,  // offsetX_left
+    -10.0f,  // offsetX_left
     320.0f,  // offsetZ_right
-    -15.0f,  // offsetX_right
+    -10.0f,  // offsetX_right
     -0.0f,   // kickX_left
     -4.0f,   // kickY_left
     -0.0f,   // kickX_right
@@ -159,27 +178,27 @@ float Config::IDLE_SPAC = 50.0;
 
 const int Config::MotionFPS = 10;
 
-char Config::leftFootJ1ID = 10;
-char Config::leftFootJ2ID = 16;
-char Config::leftFootJ3ID = 17;
-char Config::leftFootJ4ID = 18;
-char Config::leftFootJ5ID = 19;
+const char Config::leftFootJ1ID = 10;
+const char Config::leftFootJ2ID = 16;
+const char Config::leftFootJ3ID = 17;
+const char Config::leftFootJ4ID = 18;
+const char Config::leftFootJ5ID = 19;
 
-char Config::rightFootJ1ID = 9;
-char Config::rightFootJ2ID = 12;
-char Config::rightFootJ3ID = 14;
-char Config::rightFootJ4ID = 13;
-char Config::rightFootJ5ID = 15;
+const char Config::rightFootJ1ID = 9;
+const char Config::rightFootJ2ID = 12;
+const char Config::rightFootJ3ID = 14;
+const char Config::rightFootJ4ID = 13;
+const char Config::rightFootJ5ID = 15;
 
-char Config::leftArmJ1ID = 1;
-char Config::leftArmJ2ID = 3;
-char Config::leftArmJ3ID = 4;
-char Config::leftArmJ4ID = 5;
+const char Config::leftArmJ1ID = 1;
+const char Config::leftArmJ2ID = 3;
+const char Config::leftArmJ3ID = 4;
+const char Config::leftArmJ4ID = 5;
 
-char Config::rightArmJ1ID = 2;
-char Config::rightArmJ2ID = 6;
-char Config::rightArmJ3ID = 7;
-char Config::rightArmJ4ID = 8;
+const char Config::rightArmJ1ID = 2;
+const char Config::rightArmJ2ID = 6;
+const char Config::rightArmJ3ID = 7;
+const char Config::rightArmJ4ID = 8;
 
 const int Config::TAUNT_FPS = 30;
 const float Config::TAUNT_SPAC = 50.0;
