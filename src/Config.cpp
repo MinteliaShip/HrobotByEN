@@ -12,6 +12,10 @@ const int enPin = 23;
 const int stretch = 95;
 int G_fps = 40;
 
+// グローバル変数の実体定義
+bool g_isFaceUp = true;
+float g_lpfAcc = 1.0f;
+
 //コントローラのMACアドレス
 const char Config::ControllerMac[18] = "06:02:01:02:05:10";
 
@@ -93,21 +97,21 @@ GaitParameters Config::MV_X_PARAM_FAST_Y{//遅い
 };
 
 GaitParameters Config::MV_X_PARAM_TURN{
-    1.0,     // T
+    1.1,     // T
     30,      // h
-    10,      // Wd
+    20,      // Wd
     0.90,    // DutyX
     0.85,    // DutyY
     G_fps,      // Fps
-    20,      // Spac
+    35,      // Spac
     310.0f,  // offsetZ_left
-    -13.0f,  // offsetX_left
+    -20.0f,  // offsetX_left
     315.0f,  // offsetZ_right
-    -13.0f,  // offsetX_right
+    -20.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -9.0f,   // kickY_left
+    -10.0f,   // kickY_left
     -0.0f,   // kickX_right
-    -9.0f,   // kickY_right
+    -10.0f,   // kickY_right
     0.15f     // kickTime
 };
 
@@ -139,20 +143,18 @@ GaitParameters Config::MV_X_PARAM_3{
     60,      // Wd
     0.90,    // DutyX
     0.85,    // DutyY
-    G_fps,      // Fps
-    20,      // Spac
+    G_fps,   // Fps
+    25,      // Spac
     310.0f,  // offsetZ_left
-    -13.0f,  // offsetX_left
-    315.0f,  // offsetZ_right
-    -13.0f,  // offsetX_right
+    -15.0f,  // offsetX_left
+    316.0f,  // offsetZ_right
+    -15.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -9.0f,   // kickY_left
+    -9.5f,   // kickY_left
     -0.0f,   // kickX_right
-    -9.0f,   // kickY_right
+    -9.5f,   // kickY_right
     0.15f     // kickTime
 };
-
-
 
 GaitParameters Config::MV_X_PARAM_TEST{
     2.0,    //T

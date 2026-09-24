@@ -7,6 +7,69 @@
 #include "Motion.h"
 
 
+#include <Wire.h>
+
+// MPU6886 I2C設定
+#define MPU6886_ADDRESS 0x68
+#define SDA_PIN 25
+#define SCL_PIN 21
+
+
+// ローパスフィルタの平滑化係数 (0.0 < LPF_ALPHA <= 1.0)
+// 値を小さくするほど振動ノイズに強くなります
+static const float LPF_ALPHA = 0.2f;
+
+// 内部ヘルパー関数：I2Cレジスタ書き込み
+static void writeRegister(uint8_t reg, uint8_t data) {
+    Wire.beginTransmission(MPU6886_ADDRESS);
+    Wire.write(reg);
+    Wire.write(data);
+    Wire.endTransmission();
+}
+
+bool setupIMU() {
+    Wire.begin(SDA_PIN, SCL_PIN, 400000); // 400kHz Fast Mode
+    delay(50);
+
+    // WHO_AM_I レジスタの検証 (0x75 -> 0x19)
+    Wire.beginTransmission(MPU6886_ADDRESS);
+    Wire.write(0x75);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU6886_ADDRESS, (size_t)1);
+    if (Wire.read() != 0x19) {
+        return false; // 通信エラーまたはデバイス不一致
+    }
+
+    writeRegister(0x6B, 0x00); // スリープ解除
+    delay(10);
+    writeRegister(0x1C, 0x10); // ACCEL_CONFIG: ±8g (4096 LSB/g)
+    writeRegister(0x1A, 0x03); // 内蔵DLPF (~42Hz) でハードウェア帯域制限
+
+    return true;
+}
+
+
+void updateIMU() {
+    Wire.beginTransmission(MPU6886_ADDRESS);
+    Wire.write(0x3D);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU6886_ADDRESS, (size_t)2);
+
+    int16_t rawAccY = (Wire.read() << 8) | Wire.read();
+    float rawG = (float)rawAccY / 4096.0f;
+
+    // 1次ローパスフィルタ（LPF）演算
+    g_lpfAcc = (1.0f - LPF_ALPHA) * g_lpfAcc + LPF_ALPHA * rawG;
+
+    // ヒステリシス付き表裏判定
+    if (g_lpfAcc > 0.1f) {
+        g_isFaceUp = true;   // 表向き
+    } else if (g_lpfAcc < -0.1f) {
+        g_isFaceUp = false;  // 裏向き
+    }
+}
+
+
 void taskManager();
 
 void loop2(void *p);
@@ -201,11 +264,17 @@ void setup() {
     Serial.begin(serialPC_bps);
     Serial1.begin(serialServo_bps,SERIAL_8E1,rxPin,txPin);
 
+    if (!setupIMU()) {
+        Serial.println("IMU Initialization Failed!");
+        while (1) delay(100);
+    }
+
     loop2_begin();
     delay(500);
 
     Dualshock4.begin(Config::ControllerMac);
     bondReset();
+    
 
     while(1){
         if(Dualshock4.isConnected()){
@@ -248,10 +317,24 @@ void setup() {
 
 }
 
+
 void loop() {
     taskManager();
     checkMemoryUsage();
+    
+updateIMU();
+
+    // グローバル変数を参照して動作分岐
+    if (g_isFaceUp) {
+        Serial.println(">Status:1");  // 表向き
+    } else {
+        Serial.println(">Status:-1"); // 裏向き
+    }
+    
     framelim.sync();
+
+
+
 }
 
 namespace loop2_task

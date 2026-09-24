@@ -10,6 +10,10 @@
 #ifndef DECL
 #define DECL
 
+extern bool g_isFaceUp;
+// フィルタ処理後の重力加速度 [g]
+extern float g_lpfAcc;
+
 extern PS4Controller Dualshock4;
 
 /*宣言・初期化・定数*/
