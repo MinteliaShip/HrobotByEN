@@ -81,6 +81,7 @@ namespace activeMotion{//アクティブなモーションはtrueに。
     namespace walk{
         bool walk1;
         bool walkY;
+        bool walk_DEF;
         bool turn;
     }
 
@@ -193,6 +194,8 @@ void taskManager(){//タスク管理。
 }
 
 FrameLimiter framelim;
+
+
 
 void setup() {
     Serial.begin(serialPC_bps);

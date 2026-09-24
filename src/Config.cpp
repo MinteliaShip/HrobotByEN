@@ -93,22 +93,22 @@ GaitParameters Config::MV_X_PARAM_FAST_Y{//遅い
 };
 
 GaitParameters Config::MV_X_PARAM_TURN{
-    0.7,    //T
-    20,     //h
-    50,    //Wd
-    0.90,    //DutyX
-    0.85,    //DutyY
-    30,     //Fps
-    25,    //Spac
+    1.0,     // T
+    30,      // h
+    10,      // Wd
+    0.90,    // DutyX
+    0.85,    // DutyY
+    G_fps,      // Fps
+    20,      // Spac
     310.0f,  // offsetZ_left
-    -18.0f,  // offsetX_left
+    -13.0f,  // offsetX_left
     315.0f,  // offsetZ_right
-    -18.0f,  // offsetX_right
+    -13.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -2.0f,   // kickY_left
+    -9.0f,   // kickY_left
     -0.0f,   // kickX_right
-    -2.0f,   // kickY_right
-    0.2f     // kickTime
+    -9.0f,   // kickY_right
+    0.15f     // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_2{

@@ -492,7 +492,7 @@ bool motion::walk::walkY(){
 }
 
 bool motion::walk::turn(){
-    GaitParameters &param_p = Config::MV_X_PARAM_TURN;
+    GaitParameters &param_p = Config::MV_X_PARAM_3;
 
     // 毎フレーム定義・計算する変数（ローカル変数）
     float T = param_p.T;
@@ -508,10 +508,10 @@ bool motion::walk::turn(){
     float offsetZ_right = param_p.offsetZ_right;
     float offsetX_right = param_p.offsetX_right;
 
-    float kickX_left_val = param_p.kickX_left * 0.0f;
-    float kickY_left_val = param_p.kickY_left * 0.0f;
-    float kickX_right_val = param_p.kickX_right * 0.0f;
-    float kickY_right_val = param_p.kickY_right * 0.0f;
+    float kickX_left_val = param_p.kickX_left;
+    float kickY_left_val = param_p.kickY_left;
+    float kickX_right_val = param_p.kickX_right;
+    float kickY_right_val = param_p.kickY_right;
     float push_window = param_p.kickTime;
 
     int totalFrames = (int)(T * Fps);
@@ -523,8 +523,13 @@ bool motion::walk::turn(){
     switch (taskPhase){
         case 0:
         {
-            leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-            rightFoot.FootMotorInvert(1, 1, 1, 1, -1);
+            Serial.print(F("turn \n"));
+            for(int i=0;i<19;i++){
+                ServoArray[i]->setStretch(stretch);
+                delay(5);
+            }
+            leftFoot.FootMotorInvert(1, 1, 1, -1, -1);
+            rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
 
             taskPhase = 1;
             break;
@@ -542,20 +547,10 @@ bool motion::walk::turn(){
             // 右足は位相を半周期 (T / 2.0) ずらす
             float ts_right = fmod(ts_left + (T / 2.0f), T);
 
-            int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,0,1);
+            int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
 
-            float offsetY_def = -2 * stick_lx / 100.0;
-            float angle_def = -(15*PI/360.0)*stick_lx / 100.0;
-
-
-            float wd_left=0;
-            float wd_right=0;
-
-            if((bool)stick_lx){
-                wd_left = Wd;
-            }else{
-                wd_right = Wd;
-            }
+            float wd_left = -Wd * (stick_lx*0.01);
+            float wd_right = Wd * (stick_lx*0.01);
 
             // 軌道生成処理 (FootController.cpp の tread 関数を利用)
             Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
@@ -573,15 +568,15 @@ bool motion::walk::turn(){
             float support_end = DutyX * T / 2.0f;
 
             if (ts_left > (support_end - push_window) && ts_left < support_end) {
-                kick_x_left = kickX_left_val - offsetY_def;
-                kick_y_left = kickY_left_val + offsetY_def;
-                angle_left = angle_def;
+                kick_x_left = kickX_left_val - 0;
+                kick_y_left = kickY_left_val + 0;
+                angle_left = 0;
             }
 
             if (ts_right > (support_end - push_window) && ts_right < support_end) {
-                kick_x_right = kickX_right_val - offsetY_def;
-                kick_y_right = kickY_right_val + offsetY_def;
-                angle_right = angle_def;
+                kick_x_right = kickX_right_val - 0;
+                kick_y_right = kickY_right_val + 0;
+                angle_right = 0;
             }
 
             FootController::Pose leftPose={
@@ -605,8 +600,8 @@ bool motion::walk::turn(){
             }
 
             int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
-            //コントローラが押されていない時は、次のフェーズへ。
-            if(!(Dualshock4.data.button.l3)){
+            //行進のコントローラがない場合、または、回転のボタンが押された場合は抜けない
+            if(!Dualshock4.data.button.l3 && frame>=totalFrames){//最終フレームで抜けるように
                 taskPhase = 3;
                 frame = 0;
             }
