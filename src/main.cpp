@@ -1,11 +1,9 @@
 #include "Declaration.h"
 #include "AssistiveProgram.h"   //補助プログラム集
-
+#include "Vector.h"
 #include "Config.h"
 #include "ConfigDef.h"
-#include "Vector.h"
 #include "Motion.h"
-
 
 #include <Wire.h>
 
@@ -144,8 +142,8 @@ namespace activeMotion{//アクティブなモーションはtrueに。
     namespace walk{
         bool walk1;
         bool walkY;
-        bool walk_DEF;
         bool turn;
+        bool walkBack;
     }
 
     namespace posture{
@@ -169,6 +167,12 @@ namespace activeMotion{//アクティブなモーションはtrueに。
         bool getUp_prone;//うつ伏せ
 
         bool hip;//腰回転
+
+        bool sit_stand;
+        bool sitDown;
+        bool standUp;
+
+        bool lowerPos;
     }
 }
 
@@ -232,19 +236,24 @@ void taskManager(){//タスク管理。
 
     //通常歩行
     runExclusiveTask((stick_ly > 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walk1,motion::walk::walk1);
+    //通常歩行
+    runExclusiveTask((stick_ly < 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkBack,motion::walk::walkBack);
 
     //横歩行
-    runExclusiveTask(ps4Button.right || ps4Button.left || ps4Button.up || ps4Button.down ,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkY,motion::walk::walkY);
+    runExclusiveTask(ps4Button.right || ps4Button.left,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkY,motion::walk::walkY);
+
+    //姿勢を低く　攻撃時用
+    runExclusiveTask(ps4Button.down,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::lowerPos,motion::posture::lowerPos);
 
     //回転
     runExclusiveTask(button_bits == L3_BIT,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::turn,motion::walk::turn);
 
-    //単押しの攻撃モーション
-    active += runExclusiveTask(button_bits == L1_BIT || (button_bits == (L1_BIT | R1_BIT)) || (button_bits == (L1_BIT | R2_BIT)),LEFT_ARM_BIT,activeMotion::posture::battle::attack_Light_left,motion::posture::battle::attack_Light_left);
-    active += runExclusiveTask(button_bits == L2_BIT || (button_bits == (L2_BIT | R1_BIT)) || (button_bits == (L2_BIT | R2_BIT)),LEFT_ARM_BIT,activeMotion::posture::battle::attack_Medium_left,motion::posture::battle::attack_Medium_left);
+    //攻撃モーション
+    active += runExclusiveTask(ps4Button.l1,LEFT_ARM_BIT,activeMotion::posture::battle::attack_Light_left,motion::posture::battle::attack_Light_left);
+    active += runExclusiveTask(ps4Button.l2,LEFT_ARM_BIT,activeMotion::posture::battle::attack_Medium_left,motion::posture::battle::attack_Medium_left);
 
-    active += runExclusiveTask(button_bits == R1_BIT || (button_bits == (L1_BIT | R1_BIT))|| (button_bits == (L2_BIT | R1_BIT)),RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Light_right,motion::posture::battle::attack_Light_right);
-    active += runExclusiveTask(button_bits == R2_BIT || (button_bits == (L1_BIT | R2_BIT))|| (button_bits == (L2_BIT | R2_BIT)),RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Medium_right,motion::posture::battle::attack_Medium_right);
+    active += runExclusiveTask(ps4Button.r1,RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Light_right,motion::posture::battle::attack_Light_right);
+    active += runExclusiveTask(ps4Button.r2,RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Medium_right,motion::posture::battle::attack_Medium_right);
 
     //攻撃モーションがない時に実行される。実質LEDを白色に戻す担当者
     runExclusiveTask(!active,0,activeMotion::posture::nop,motion::posture::nop);
@@ -252,13 +261,16 @@ void taskManager(){//タスク管理。
     //姿勢を正す。 強制移行可能
     runExclusiveTask(button_bits == SHARE_BIT,0,activeMotion::posture::pose,motion::posture::pose);
     runExclusiveTask(button_bits == OPTIONS_BIT,0,activeMotion::posture::taunt,motion::posture::taunt);
-    //デバッグモード 強制移行可能
+
+    //デバッグモード 強制移行可能　[ブロッキング]
     runExclusiveTask(button_bits == PS_BIT,0,activeMotion::posture::LOCK_DebugMode,motion::posture::LOCK_DebugMode);
+
+    //座る ＆　立つ.
+    runExclusiveTask(button_bits==TRIANGLE_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::sit_stand,motion::posture::sit_stand);
+
 }
 
 FrameLimiter framelim;
-
-
 
 void setup() {
     Serial.begin(serialPC_bps);
@@ -322,7 +334,7 @@ void loop() {
     taskManager();
     checkMemoryUsage();
     
-updateIMU();
+    updateIMU();
 
     // グローバル変数を参照して動作分岐
     if (g_isFaceUp) {

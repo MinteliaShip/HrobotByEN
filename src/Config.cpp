@@ -9,7 +9,7 @@ const int rxPin = 22;
 const int enPin = 23;
 /**********************************************/
 
-const int stretch = 95;
+const int stretch = 105;
 int G_fps = 40;
 
 // グローバル変数の実体定義
@@ -97,21 +97,21 @@ GaitParameters Config::MV_X_PARAM_FAST_Y{//遅い
 };
 
 GaitParameters Config::MV_X_PARAM_TURN{
-    1.1,     // T
-    30,      // h
-    20,      // Wd
-    0.90,    // DutyX
-    0.85,    // DutyY
+    0.3,     // T
+    60,      // h
+    180,      // Wd
+    0.95,    // DutyX
+    0.90,    // DutyY
     G_fps,      // Fps
-    35,      // Spac
+    15,      // Spac
     310.0f,  // offsetZ_left
-    -20.0f,  // offsetX_left
-    315.0f,  // offsetZ_right
-    -20.0f,  // offsetX_right
-    -0.0f,   // kickX_left
-    -10.0f,   // kickY_left
+    -25.0f,  // offsetX_left
+    350.0f,  // offsetZ_right
+    -25.0f,  // offsetX_right
+    -3.0f,   // kickX_left
+    -9.0f,   // kickY_left
     -0.0f,   // kickX_right
-    -10.0f,   // kickY_right
+    -8.0f,   // kickY_right
     0.15f     // kickTime
 };
 
@@ -134,25 +134,43 @@ GaitParameters Config::MV_X_PARAM_2{
     0.4f     // kickTime
 };
 
-
-
-
 GaitParameters Config::MV_X_PARAM_3{
     1.0,     // T
     30,      // h
-    60,      // Wd
+    50,      // Wd
     0.90,    // DutyX
-    0.85,    // DutyY
+    0.88,    // DutyY
     G_fps,   // Fps
-    25,      // Spac
+    35,      // Spac
     310.0f,  // offsetZ_left
-    -15.0f,  // offsetX_left
+    -14.0f,  // offsetX_left
     316.0f,  // offsetZ_right
-    -15.0f,  // offsetX_right
+    -14.0f,  // offsetX_right
     -0.0f,   // kickX_left
-    -9.5f,   // kickY_left
+    -10.0f,   // kickY_left
     -0.0f,   // kickX_right
-    -9.5f,   // kickY_right
+    -10.0f,   // kickY_right
+    0.15f     // kickTime
+};
+
+
+
+GaitParameters Config::MV_X_PARAM_BACK{
+    1.0,     // T
+    30,      // h
+    -50,      // Wd
+    0.90,    // DutyX
+    0.88,    // DutyY
+    G_fps,   // Fps
+    35,      // Spac
+    310.0f,  // offsetZ_left
+    -14.0f,  // offsetX_left
+    316.0f,  // offsetZ_right
+    -14.0f,  // offsetX_right
+    -0.0f,   // kickX_left
+    -10.0f,   // kickY_left
+    -0.0f,   // kickX_right
+    -10.0f,   // kickY_right
     0.15f     // kickTime
 };
 

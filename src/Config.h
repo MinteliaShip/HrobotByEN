@@ -60,6 +60,7 @@ namespace Config {
     extern GaitParameters MV_X_PARAM_3;
     extern GaitParameters MV_X_PARAM_TEST;
     extern GaitParameters MV_X_PARAM_TURN;
+    extern GaitParameters MV_X_PARAM_BACK;
 
     extern GaitParameters MV_X_PARAM_1Y;
     extern GaitParameters MV_X_PARAM_FAST_Y;

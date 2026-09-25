@@ -4,7 +4,6 @@
 #include <ArduinoEigen.h>
 #include <math.h>
 
-
 namespace FootIK{
     struct Pose
     {
