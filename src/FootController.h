@@ -7,7 +7,6 @@
 #include "ConfigDef.h"
 #include "Vector.h"
 
-
 class FootController{
   private:
     struct footJoint5
@@ -54,22 +53,26 @@ class FootController{
     };
 
   private:
-    leng8 footLeng;
-    servoICS::Servo servoJ1;
-    servoICS::Servo servoJ2;
-    servoICS::Servo servoJ3;
-    servoICS::Servo servoJ4;
-    servoICS::Servo servoJ5;
+    float* footLeng;
+    servoICS::Servo* servoJ1;
+    servoICS::Servo* servoJ2;
+    servoICS::Servo* servoJ3;
+    servoICS::Servo* servoJ4;
+    servoICS::Servo* servoJ5;
 
     footJoint5 IK(const Pose& targetPose,int mode);
+
+    int JointInv[5]={1,1,1,1,1};//-1だと反転。普通に符号を入れる。
+
   public:
-    FootController(IcsServoConfig IcsServoConfig_, leng8 footLeng_);
+    FootController(servoICS::Servo* ServoArray_[], float footLeng_[]);
 
     float tread_y(float h,float T,float Duty,float ts_);
     float tread_x(float Wd,float T,float Duty,float ts_);
     Vector2 tread(float h,float Wd,float DutyX,float DutyY,float T,float ts);
     float tread_kick(float kickAngle,float T1,float T,float Duty,float ts);
 
+    void FootMotorInvert(int J1_,int J2_,int J3_,int J4_,int J5_);
 
     void setJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_);
     void setJointAnglesDeg(float J1_,float J2_,float J3_,float J4_,float J5_);
@@ -79,7 +82,6 @@ class FootController{
 
     void getJointAngles(long J1_,long J2_,long J3_,long J4_,long J5_);
 
-    void setOffset(long J1_,long J2_,long J3_,long J4_,long J5_);
     void DemoPos();
 
     void setTargetPose(const Pose& targetPos,float kick=0,int mode=0);
