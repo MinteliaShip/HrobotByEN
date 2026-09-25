@@ -1,0 +1,383 @@
+#include "Declaration.h"
+#include "AssistiveProgram.h"   //補助プログラム集
+#include "Vector.h"
+#include "Config.h"
+#include "ConfigDef.h"
+#include "Motion.h"
+
+#include <Wire.h>
+
+// MPU6886 I2C設定
+#define MPU6886_ADDRESS 0x68
+#define SDA_PIN 25
+#define SCL_PIN 21
+
+
+// ローパスフィルタの平滑化係数 (0.0 < LPF_ALPHA <= 1.0)
+// 値を小さくするほど振動ノイズに強くなります
+static const float LPF_ALPHA = 0.2f;
+
+// 内部ヘルパー関数：I2Cレジスタ書き込み
+static void writeRegister(uint8_t reg, uint8_t data) {
+    Wire.beginTransmission(MPU6886_ADDRESS);
+    Wire.write(reg);
+    Wire.write(data);
+    Wire.endTransmission();
+}
+
+bool setupIMU() {
+    Wire.begin(SDA_PIN, SCL_PIN, 400000); // 400kHz Fast Mode
+    delay(50);
+
+    // WHO_AM_I レジスタの検証 (0x75 -> 0x19)
+    Wire.beginTransmission(MPU6886_ADDRESS);
+    Wire.write(0x75);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU6886_ADDRESS, (size_t)1);
+    if (Wire.read() != 0x19) {
+        return false; // 通信エラーまたはデバイス不一致
+    }
+
+    writeRegister(0x6B, 0x00); // スリープ解除
+    delay(10);
+    writeRegister(0x1C, 0x10); // ACCEL_CONFIG: ±8g (4096 LSB/g)
+    writeRegister(0x1A, 0x03); // 内蔵DLPF (~42Hz) でハードウェア帯域制限
+
+    return true;
+}
+
+
+void updateIMU() {
+    Wire.beginTransmission(MPU6886_ADDRESS);
+    Wire.write(0x3D);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU6886_ADDRESS, (size_t)2);
+
+    int16_t rawAccY = (Wire.read() << 8) | Wire.read();
+    float rawG = (float)rawAccY / 4096.0f;
+
+    // 1次ローパスフィルタ（LPF）演算
+    g_lpfAcc = (1.0f - LPF_ALPHA) * g_lpfAcc + LPF_ALPHA * rawG;
+
+    // ヒステリシス付き表裏判定
+    if (g_lpfAcc > 0.1f) {
+        g_isFaceUp = true;   // 表向き
+    } else if (g_lpfAcc < -0.1f) {
+        g_isFaceUp = false;  // 裏向き
+    }
+}
+
+
+void taskManager();
+
+void loop2(void *p);
+
+void loop2_begin(){
+    xTaskCreatePinnedToCore(
+        loop2,           // タスク関数名
+        "Loop2Task",     // タスク名（デバッグ用文字列）
+        4096,            // スタックサイズ（バイト単位。必要に応じて調整）
+        NULL,            // タスク引数
+        1,               // 優先度（1〜24、数値が大きいほど優先）
+        NULL,            // タスクハンドル
+        0                // 割り当てるコア番号（0 または 1）
+    );
+}
+
+inline void checkMemoryUsage(unsigned long intervalMs = 1000) {
+    static unsigned long lastCheck = 0;
+    unsigned long now = millis();
+
+    // 指定インターバル（デフォルト1000ms）経過していない場合は即復帰（極小負荷）
+    if (now - lastCheck < intervalMs) {
+        return;
+    }
+    lastCheck = now;
+
+    uint32_t total = ESP.getHeapSize();
+    uint32_t free = ESP.getFreeHeap();
+    uint32_t minFree = ESP.getMinFreeHeap();
+    uint32_t used = total - free;
+    float usageRatio = ((float)used / (float)total) * 100.0f;
+
+    // 1行で要点をまとめた軽量シリアル出力
+    Serial.printf("[RAM] Used: %u B (%.1f%%) | Free: %u B | MinFree: %u B\n", 
+                  used, usageRatio, free, minFree);
+
+    // メモリ危険域（20KB以下）の警告
+    if (free < 20000) {
+        Serial.printf("[WARN] Critical Low RAM! Free: %u B\n", free);
+    }
+}
+
+const uint32_t RIGHT_BIT     = (1UL << 0);
+const uint32_t DOWN_BIT      = (1UL << 1);
+const uint32_t UP_BIT        = (1UL << 2);
+const uint32_t LEFT_BIT      = (1UL << 3);
+
+const uint32_t SQUARE_BIT    = (1UL << 4);
+const uint32_t CROSS_BIT     = (1UL << 5);
+const uint32_t CIRCLE_BIT    = (1UL << 6);
+const uint32_t TRIANGLE_BIT  = (1UL << 7);
+
+const uint32_t UPRIGHT_BIT   = (1UL << 8);
+const uint32_t DOWNRIGHT_BIT = (1UL << 9);
+const uint32_t UPLEFT_BIT    = (1UL << 10);
+const uint32_t DOWNLEFT_BIT  = (1UL << 11);
+
+const uint32_t L1_BIT        = (1UL << 12);
+const uint32_t R1_BIT        = (1UL << 13);
+const uint32_t L2_BIT        = (1UL << 14);
+const uint32_t R2_BIT        = (1UL << 15);
+
+const uint32_t SHARE_BIT     = (1UL << 16);
+const uint32_t OPTIONS_BIT   = (1UL << 17);
+const uint32_t L3_BIT        = (1UL << 18);
+const uint32_t R3_BIT        = (1UL << 19);
+
+const uint32_t PS_BIT        = (1UL << 20);
+const uint32_t TOUCHPAD_BIT  = (1UL << 21);
+
+namespace activeMotion{//アクティブなモーションはtrueに。
+    namespace walk{
+        bool walk1;
+        bool walkY;
+        bool turn;
+        bool walkBack;
+    }
+
+    namespace posture{
+        namespace battle{
+            bool attack_Light_left;
+            bool attack_Light_right;
+            bool attack_Medium_left;
+            bool attack_Medium_right;
+            bool attack_Heavy_1;
+            bool attack_Heavy_2;
+        }
+
+        bool taunt;
+        bool nop;
+        bool LOCK_DebugMode;
+        bool pose;
+        bool chair;   //椅子に座る
+        bool kneeling;   //膝立ち
+        bool getUp;
+        bool getUp_supine;//仰向け
+        bool getUp_prone;//うつ伏せ
+
+        bool hip;//腰回転
+
+        bool sit_stand;
+        bool sitDown;
+        bool standUp;
+
+        bool lowerPos;
+    }
+}
+
+char busyPartsBit;
+//コントローラ判定
+//0 hip
+//1 leftArm
+//2 rightArm
+//3 leftFoot
+//4 rightFoot
+//5 Non
+//6 Non
+//7 Non
+
+const char HIP_BIT        = 0b00000001;
+const char LEFT_ARM_BIT   = 0b00000010;
+const char RIGHT_ARM_BIT  = 0b00000100;
+const char LEFT_FOOT_BIT  = 0b00001000;
+const char RIGHT_FOOT_BIT = 0b00010000;
+
+bool runExclusiveTask(bool startFlag,char targetBit, bool &activeFlag, bool (*motionFunc)()) {
+    if (activeFlag) {
+        // 実行中の場合：モーションを継続し、終了したら解放
+        if (!motionFunc()) {
+            activeFlag = false;
+            busyPartsBit &= ~targetBit;
+        }
+        return true;
+    } else if (startFlag && ((busyPartsBit & targetBit) == 0)) {
+        // 停止中で、リソースが空いている場合：起動条件を満たしていれば開始
+        // ※必要に応じて外部の起動トリガー条件を引数に追加可能
+        activeFlag = true;
+        busyPartsBit |= targetBit;
+        
+        // 初回実行
+        if (!motionFunc()) {
+            activeFlag = false;
+            busyPartsBit &= ~targetBit;
+        }
+        return true;
+    }
+    return false; // 他のタスクが占有中のため実行不可
+}
+
+void taskManager(){//タスク管理。
+    bool active=0;
+
+    uint32_t button_bits = 0;
+    memcpy(&button_bits, &Dualshock4.data.button, sizeof(Dualshock4.data.button));
+    ps4_button_t &ps4Button = Dualshock4.data.button;
+    Serial.println(busyPartsBit, BIN);
+
+    //起き上がり
+    runExclusiveTask(button_bits==TOUCHPAD_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::getUp,motion::posture::getUp);
+
+    //腰回転
+    runExclusiveTask(true,HIP_BIT,activeMotion::posture::hip,motion::posture::hip);
+
+    //歩行モーション
+    int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
+
+    //通常歩行
+    runExclusiveTask((stick_ly > 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walk1,motion::walk::walk1);
+    //通常歩行
+    runExclusiveTask((stick_ly < 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkBack,motion::walk::walkBack);
+
+    //横歩行
+    runExclusiveTask(ps4Button.right || ps4Button.left,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkY,motion::walk::walkY);
+
+    //姿勢を低く　攻撃時用
+    runExclusiveTask(ps4Button.down,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::lowerPos,motion::posture::lowerPos);
+
+    //回転
+    runExclusiveTask(button_bits == L3_BIT,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::turn,motion::walk::turn);
+
+    //攻撃モーション
+    active += runExclusiveTask(ps4Button.l1,LEFT_ARM_BIT,activeMotion::posture::battle::attack_Light_left,motion::posture::battle::attack_Light_left);
+    active += runExclusiveTask(ps4Button.l2,LEFT_ARM_BIT,activeMotion::posture::battle::attack_Medium_left,motion::posture::battle::attack_Medium_left);
+
+    active += runExclusiveTask(ps4Button.r1,RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Light_right,motion::posture::battle::attack_Light_right);
+    active += runExclusiveTask(ps4Button.r2,RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Medium_right,motion::posture::battle::attack_Medium_right);
+
+    //攻撃モーションがない時に実行される。実質LEDを白色に戻す担当者
+    runExclusiveTask(!active,0,activeMotion::posture::nop,motion::posture::nop);
+
+    //姿勢を正す。 強制移行可能
+    runExclusiveTask(button_bits == SHARE_BIT,0,activeMotion::posture::pose,motion::posture::pose);
+    runExclusiveTask(button_bits == OPTIONS_BIT,0,activeMotion::posture::taunt,motion::posture::taunt);
+
+    //デバッグモード 強制移行可能　[ブロッキング]
+    runExclusiveTask(button_bits == PS_BIT,0,activeMotion::posture::LOCK_DebugMode,motion::posture::LOCK_DebugMode);
+
+    //座る ＆　立つ.
+    runExclusiveTask(button_bits==TRIANGLE_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::sit_stand,motion::posture::sit_stand);
+
+}
+
+FrameLimiter framelim;
+
+void setup() {
+    Serial.begin(serialPC_bps);
+    Serial1.begin(serialServo_bps,SERIAL_8E1,rxPin,txPin);
+
+    if (!setupIMU()) {
+        Serial.println("IMU Initialization Failed!");
+        while (1) delay(100);
+    }
+
+    loop2_begin();
+    delay(500);
+
+    Dualshock4.begin(Config::ControllerMac);
+    bondReset();
+    
+
+    while(1){
+        if(Dualshock4.isConnected()){
+            Dualshock4.setLed(255, 255, 255);
+            Dualshock4.setRumble(0, 255);
+            Dualshock4.sendToController();
+            resetRumble(500);   //500ms後に停止。
+            break;
+        }
+    }
+    // 設定の送信
+    Dualshock4.sendToController();
+    Serial.println("Connected");
+
+    LittleFS_ini();//初期化
+    listFiles();//保存データを一覧表示
+
+    #ifndef SIMULATION
+        const float offsetDeg[10]={-0.13,1.11,-4.39,3.00,2.26,15.76,1.59,2.63,-6.21,20.00};//-1.485001
+        for(int i=0;i<10;i++){
+            ServoArray[i+9]->setOffsetDeg(offsetDeg[i]);
+            delay(5);
+        }
+        for(int i=0;i<19;i++){
+            ServoArray[i]->setStretch(stretch);
+            delay(5);
+        }
+        ServoArray[13]->setStretch(10);
+        delay(5);
+        ServoArray[18]->setStretch(10);
+        delay(5);
+        ServoArray[0]->setSkip(true);
+    #endif
+
+    Dualshock4.setLed(255, 0, 0);
+    Dualshock4.sendToController();
+
+    framelim.setInterval(1000 / G_fps);
+
+
+}
+
+
+void loop() {
+    taskManager();
+    checkMemoryUsage();
+    
+    updateIMU();
+
+    // グローバル変数を参照して動作分岐
+    if (g_isFaceUp) {
+        Serial.println(">Status:1");  // 表向き
+    } else {
+        Serial.println(">Status:-1"); // 裏向き
+    }
+    
+    framelim.sync();
+
+
+
+}
+
+namespace loop2_task
+{
+    // resetRumble
+    volatile unsigned long resetRumble_time=0;
+    volatile unsigned long startTime = 0;
+    volatile bool resetRumble_flag=false;
+}
+
+void resetRumble(long time_ms) {
+    loop2_task::startTime = millis();
+    loop2_task::resetRumble_time = time_ms;
+    loop2_task::resetRumble_flag = true;
+}
+
+void loop2(void *p){
+    while (true) {
+        //[resetRumble]タスク
+        // フラグが立っており、指定された時間が経過したか判定
+        if (loop2_task::resetRumble_flag) {
+            if (millis() - loop2_task::startTime >= loop2_task::resetRumble_time) {
+                // 1. フラグを降ろす（2重実行防止）
+                loop2_task::resetRumble_flag = false;
+
+                // 2. コントローラーの振動をリセットして送信
+                Dualshock4.setRumble(0, 0);
+                Dualshock4.sendToController();
+            }
+        }
+
+        delay(1);
+    }
+}
