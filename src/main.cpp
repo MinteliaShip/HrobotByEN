@@ -12,7 +12,6 @@
 #define SDA_PIN 25
 #define SCL_PIN 21
 
-
 // ローパスフィルタの平滑化係数 (0.0 < LPF_ALPHA <= 1.0)
 // 値を小さくするほど振動ノイズに強くなります
 static const float LPF_ALPHA = 0.2f;
@@ -110,114 +109,42 @@ inline void checkMemoryUsage(unsigned long intervalMs = 1000) {
     }
 }
 
-const uint32_t RIGHT_BIT     = (1UL << 0);
-const uint32_t DOWN_BIT      = (1UL << 1);
-const uint32_t UP_BIT        = (1UL << 2);
-const uint32_t LEFT_BIT      = (1UL << 3);
 
-const uint32_t SQUARE_BIT    = (1UL << 4);
-const uint32_t CROSS_BIT     = (1UL << 5);
-const uint32_t CIRCLE_BIT    = (1UL << 6);
-const uint32_t TRIANGLE_BIT  = (1UL << 7);
+bool runExclusiveTask(motionBase* motion) {
+    static char usingPartsBit = 0;
 
-const uint32_t UPRIGHT_BIT   = (1UL << 8);
-const uint32_t DOWNRIGHT_BIT = (1UL << 9);
-const uint32_t UPLEFT_BIT    = (1UL << 10);
-const uint32_t DOWNLEFT_BIT  = (1UL << 11);
-
-const uint32_t L1_BIT        = (1UL << 12);
-const uint32_t R1_BIT        = (1UL << 13);
-const uint32_t L2_BIT        = (1UL << 14);
-const uint32_t R2_BIT        = (1UL << 15);
-
-const uint32_t SHARE_BIT     = (1UL << 16);
-const uint32_t OPTIONS_BIT   = (1UL << 17);
-const uint32_t L3_BIT        = (1UL << 18);
-const uint32_t R3_BIT        = (1UL << 19);
-
-const uint32_t PS_BIT        = (1UL << 20);
-const uint32_t TOUCHPAD_BIT  = (1UL << 21);
-
-namespace activeMotion{//アクティブなモーションはtrueに。
-    namespace walk{
-        bool walk1;
-        bool walkY;
-        bool turn;
-        bool walkBack;
-    }
-
-    namespace posture{
-        namespace battle{
-            bool attack_Light_left;
-            bool attack_Light_right;
-            bool attack_Medium_left;
-            bool attack_Medium_right;
-            bool attack_Heavy_1;
-            bool attack_Heavy_2;
-        }
-
-        bool taunt;
-        bool nop;
-        bool LOCK_DebugMode;
-        bool pose;
-        bool chair;   //椅子に座る
-        bool kneeling;   //膝立ち
-        bool getUp;
-        bool getUp_supine;//仰向け
-        bool getUp_prone;//うつ伏せ
-
-        bool hip;//腰回転
-
-        bool sit_stand;
-        bool sitDown;
-        bool standUp;
-
-        bool lowerPos;
-    }
-}
-
-char busyPartsBit;
-//コントローラ判定
-//0 hip
-//1 leftArm
-//2 rightArm
-//3 leftFoot
-//4 rightFoot
-//5 Non
-//6 Non
-//7 Non
-
-const char HIP_BIT        = 0b00000001;
-const char LEFT_ARM_BIT   = 0b00000010;
-const char RIGHT_ARM_BIT  = 0b00000100;
-const char LEFT_FOOT_BIT  = 0b00001000;
-const char RIGHT_FOOT_BIT = 0b00010000;
-
-bool runExclusiveTask(bool startFlag,char targetBit, bool &activeFlag, bool (*motionFunc)()) {
-    if (activeFlag) {
+    if (motion->isActive) {
         // 実行中の場合：モーションを継続し、終了したら解放
-        if (!motionFunc()) {
-            activeFlag = false;
-            busyPartsBit &= ~targetBit;
+        if (!motion->motionLoop()) {
+            motion->isActive = false;
+            usingPartsBit &= ~(motion->motionArrUsingBit);
         }
         return true;
-    } else if (startFlag && ((busyPartsBit & targetBit) == 0)) {
+    } 
+    else if (motion->canStart() && ((usingPartsBit & motion->motionArrUsingBit) == 0)) {
         // 停止中で、リソースが空いている場合：起動条件を満たしていれば開始
-        // ※必要に応じて外部の起動トリガー条件を引数に追加可能
-        activeFlag = true;
-        busyPartsBit |= targetBit;
+        motion->isActive = true;
+        usingPartsBit |= motion->motionArrUsingBit;
         
         // 初回実行
-        if (!motionFunc()) {
-            activeFlag = false;
-            busyPartsBit &= ~targetBit;
+        if (!motion->motionLoop()) {
+            motion->isActive = false;
+            usingPartsBit &= ~(motion->motionArrUsingBit);
         }
         return true;
     }
-    return false; // 他のタスクが占有中のため実行不可
+    return false; // 他のタスクが占有中、または起動条件を満たさないため実行不可
 }
 
-void taskManager(){//タスク管理。
+void taskManager() {
+    for(int i = 0; i < motionList::motionArrNum; i++) {
+        // オブジェクトのポインタを丸ごと渡す
+        runExclusiveTask(motionList::motionArr[i]);
+    }
+}
+
+/*
+void taskManager_bu(){//タスク管理。
     bool active=0;
 
     uint32_t button_bits = 0;
@@ -269,6 +196,7 @@ void taskManager(){//タスク管理。
     runExclusiveTask(button_bits==TRIANGLE_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::sit_stand,motion::posture::sit_stand);
 
 }
+    */
 
 FrameLimiter framelim;
 

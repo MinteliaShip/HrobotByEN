@@ -153,8 +153,6 @@ GaitParameters Config::MV_X_PARAM_3{
     0.15f     // kickTime
 };
 
-
-
 GaitParameters Config::MV_X_PARAM_BACK{
     1.0,     // T
     30,      // h
