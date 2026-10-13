@@ -3,36 +3,37 @@
 
 #include <Arduino.h>
 #include "AssistiveProgram.h"
+#include "Config.h"
+#include "Declaration.h"
+#include <cstring>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+#include "FootController.h"
 
 class motionBase;
 
 namespace motionList {
-    // インスタンス化されたポインタをlistに収容（※必ずポインタ配列 motionBase* にする）
     inline motionBase* motionArr[128];
     inline int motionArrNum = 0;
 }
 
-// モーションの基底クラス
 class motionBase {
 public:
     explicit motionBase(char motionArrUsingBit_ = 0) {
         motionArrUsingBit = motionArrUsingBit_;
-        
-        // 配列外アクセス（オーバーフロー）を防ぐための安全処理
         if (motionList::motionArrNum < 128) {
             motionList::motionArr[motionList::motionArrNum] = this;
             motionList::motionArrNum++;
         }
     }
 
-    bool isActive = false; // 起動中フラグ
+    bool isActive = false;
 
-    virtual bool canStart() = 0;   // 実行条件の判定（および開始時リセット）
-    virtual bool motionLoop() = 0; // ループ処理（継続: true / 終了: false）
+    virtual bool canStart() = 0;
+    virtual bool motionLoop() = 0;
     char motionArrUsingBit = 0;
 };
 
-// --- クラス宣言 ＋ インスタンス化を行うマクロ ---
 #define DECLARE_MOTION(ClassName, UsingBit) \
     class ClassName : public motionBase { \
     public: \
@@ -40,7 +41,6 @@ public:
         bool canStart() override; \
         bool motionLoop() override; \
     }; \
-    /* 引数なしで宣言することで、コンストラクタのデフォルト引数 (UsingBit) が適用される */ \
     inline ClassName ClassName##_inst;
 
 namespace motion {
@@ -59,6 +59,7 @@ namespace motion {
     DECLARE_MOTION(taunt, ALL_BIT)
     DECLARE_MOTION(nop, ALL_BIT)
     DECLARE_MOTION(LOCK_DebugMode, ALL_BIT)
+    DECLARE_MOTION(TeachingMode, ALL_BIT)  // ★ 教示モード（全軸占有）を追加
     DECLARE_MOTION(pose, ALL_BIT)
     DECLARE_MOTION(chair, ALL_BIT)
     DECLARE_MOTION(kneeling, ALL_BIT)
@@ -74,6 +75,7 @@ namespace motion {
     DECLARE_MOTION(hip, HIP_BIT)
 
     DECLARE_MOTION(jump, ALL_BIT)
+    DECLARE_MOTION(ServoStateDeBug, NON_BIT)
 } // namespace motion
 
 #endif // MOTION_H_

@@ -1,10 +1,14 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "ConfigDef.h"
 #include <Arduino.h>
+
+// 旧 ConfigDef.h からの統合マクロ定義
+#define DEBUG
+//#define SIMULATION
+
 /**********************************************/
-//基本設定
+// 基本設定
 extern const int serialPC_bps;
 extern const int serialServo_bps;
 extern const int txPin;
@@ -13,6 +17,10 @@ extern const int enPin;
 /**********************************************/
 extern const int stretch;
 extern int G_fps;
+
+extern float NeutralPoseY;
+extern float NeutralPoseX;
+extern float NeutralSpac;
 
 struct GaitParameters {
   float T;
@@ -33,15 +41,14 @@ struct GaitParameters {
   float kickTime;
 };
 
-
 namespace Config {
-    //コントローラのMACアドレス
+    // コントローラのMACアドレス
     extern const char ControllerMac[18];
 
-    //PCとの通信のボートレート
+    // PCとの通信のボーレート
     extern const long bpsPC;
 
-    //サーボとの通信設定
+    // サーボとの通信設定
     extern HardwareSerial* ServoSerial;
 
     extern const char enPin;
@@ -51,10 +58,10 @@ namespace Config {
 
     extern const char hipServoID;
 
-    //足寸法
+    // 足寸法
     extern float lengs8[8];
 
-    //歩行軌道のパラメータ
+    // 歩行軌道のパラメータ
     extern GaitParameters MV_X_PARAM;
     extern GaitParameters MV_X_PARAM_2;
     extern GaitParameters MV_X_PARAM_3;
@@ -66,7 +73,6 @@ namespace Config {
     extern GaitParameters MV_X_PARAM_FAST_Y;
 
     extern GaitParameters MV_FREE_PARAM;
-
     extern GaitParameters MV_Y_PARAM;
 
     extern int IDEL_FPS;
@@ -74,6 +80,7 @@ namespace Config {
 
     extern const int MotionFPS;
 
+    // サーボID定義
     extern const char leftFootJ1ID;
     extern const char leftFootJ2ID;
     extern const char leftFootJ3ID;
@@ -98,7 +105,6 @@ namespace Config {
 
     extern const int TAUNT_FPS;
     extern const float TAUNT_SPAC;
-
 }
 
-#endif
+#endif // CONFIG_H

@@ -1,24 +1,22 @@
+#ifndef DECL
+#define DECL
+
 #include <Arduino.h>
-#include <servoICS.h>
+#include "servoICS.h"
 #include <PS4Controller.h>
 #include <esp_gap_bt_api.h>
 #include <LittleFS.h>
 #include "Config.h"
-#include "ConfigDef.h"
+#include "AssistiveProgram.h"
 #include "FootController.h"
 
-#ifndef DECL
-#define DECL
-
 extern bool g_isFaceUp;
-// フィルタ処理後の重力加速度 [g]
 extern float g_lpfAcc;
 
 extern PS4Controller Dualshock4;
 
-/*宣言・初期化・定数*/
+/* 宣言・初期化・定数 */
 extern servoICS::Servo hipServo;
-
 extern servoICS::Servo leftFoot1;
 
 extern servoICS::Servo leftArmJ1;
@@ -47,6 +45,7 @@ extern FootController rightFoot;
 void resetRumble(long time);
 
 enum BusyPartsBit : char {
+    NON_BIT        = 0b00000000,
     HIP_BIT        = 0b00000001,
     LEFT_ARM_BIT   = 0b00000010,
     RIGHT_ARM_BIT  = 0b00000100,
@@ -87,4 +86,4 @@ enum ButtonBit : uint32_t {
     TOUCHPAD_BIT = (1UL << 21)
 };
 
-#endif
+#endif // DECL

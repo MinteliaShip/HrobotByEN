@@ -1,5 +1,329 @@
 #include "Motion.h"
-#include "ConfigDef.h"
+
+extern volatile bool deviceConnected;
+extern void sendBLE(uint8_t* data, size_t length);
+
+// 教示モード（TX）制御用の固定長メールボックス。
+// onWrite callbackはフレームを置くだけで、サーボUARTアクセスはメインループで実行する。
+volatile bool g_teachCmdPending = false;
+volatile bool g_teachModeActive = false;
+static volatile bool g_teachCmdProcessing = false;
+uint8_t g_teachRxBuffer[64] = {0};
+size_t g_teachRxLength = 0;
+static portMUX_TYPE g_teachCmdMux = portMUX_INITIALIZER_UNLOCKED;
+
+bool queueTeachingCommand(const uint8_t* data, size_t length) {
+    if (data == nullptr || length != 45 || data[0] != 0x01) return false;
+
+    bool accepted = false;
+    portENTER_CRITICAL(&g_teachCmdMux);
+    if (!g_teachCmdPending && !g_teachCmdProcessing) {
+        memcpy(g_teachRxBuffer, data, length);
+        g_teachRxLength = length;
+        g_teachModeActive = true;
+        g_teachCmdPending = true;
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&g_teachCmdMux);
+    return accepted;
+}
+
+void stopTeachingMode() {
+    portENTER_CRITICAL(&g_teachCmdMux);
+    g_teachModeActive = false;
+    if (!g_teachCmdProcessing) {
+        g_teachCmdPending = false;
+        g_teachRxLength = 0;
+    }
+    portEXIT_CRITICAL(&g_teachCmdMux);
+}
+
+// ==============================================================
+// BLE事前転送モーション。1フレーム41byte: duration(uint16 LE), mode(uint8), ICS[19](int16 LE)
+// mode 0=なめらか / 1=イチギメ。角度 -1=無視、0=FREE、それ以外=ICS指令。
+// ==============================================================
+static constexpr uint8_t UPLOAD_BEGIN = 0x30;
+static constexpr uint8_t UPLOAD_DATA = 0x31;
+static constexpr uint8_t UPLOAD_COMMIT = 0x32;
+static constexpr uint8_t UPLOAD_START = 0x33;
+static constexpr uint8_t UPLOAD_EMERGENCY_STOP = 0x34;
+static constexpr size_t UPLOAD_FRAME_BYTES = 41;
+static constexpr uint16_t UPLOAD_MAX_FRAMES = 100;
+static constexpr size_t UPLOAD_MAX_BYTES = UPLOAD_FRAME_BYTES * UPLOAD_MAX_FRAMES;
+
+static uint8_t g_uploadedMotionBytes[UPLOAD_MAX_BYTES];
+static uint16_t g_uploadedFrameCount = 0;
+static size_t g_uploadedExpectedBytes = 0;
+static size_t g_uploadedReceivedBytes = 0;
+static volatile bool g_uploadedMotionReady = false;
+static volatile bool g_uploadedMotionActive = false;
+static volatile bool g_uploadedEmergencyPending = false;
+static volatile bool g_uploadedEmergencyLatched = false;
+static volatile uint32_t g_uploadedMotionGeneration = 0;
+static portMUX_TYPE g_uploadedMotionMux = portMUX_INITIALIZER_UNLOCKED;
+
+bool handleUploadedMotionCommand(const uint8_t* data, size_t length) {
+    if (data == nullptr || length == 0) return false;
+    const uint8_t command = data[0];
+
+    if (command == UPLOAD_BEGIN) {
+        if (length != 3) return false;
+        const uint16_t count = static_cast<uint16_t>(data[1]) |
+                               (static_cast<uint16_t>(data[2]) << 8);
+        if (count == 0 || count > UPLOAD_MAX_FRAMES) return false;
+        bool accepted = false;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        if (!g_uploadedMotionActive && !g_uploadedEmergencyPending) {
+            g_uploadedFrameCount = count;
+            g_uploadedExpectedBytes = static_cast<size_t>(count) * UPLOAD_FRAME_BYTES;
+            g_uploadedReceivedBytes = 0;
+            g_uploadedMotionReady = false;
+            accepted = true;
+        }
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        return accepted;
+    }
+
+    if (command == UPLOAD_DATA) {
+        if (length < 4 || length > 20) return false;
+        const size_t offset = static_cast<size_t>(data[1]) |
+                              (static_cast<size_t>(data[2]) << 8);
+        const size_t count = length - 3;
+        bool accepted = false;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        if (!g_uploadedMotionActive && !g_uploadedMotionReady &&
+            g_uploadedExpectedBytes > 0 && offset == g_uploadedReceivedBytes &&
+            offset + count <= g_uploadedExpectedBytes) {
+            memcpy(g_uploadedMotionBytes + offset, data + 3, count);
+            g_uploadedReceivedBytes += count;
+            accepted = true;
+        }
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        return accepted;
+    }
+
+    if (command == UPLOAD_COMMIT) {
+        if (length != 1) return false;
+        bool complete = false;
+        uint16_t framesToValidate = 0;
+        size_t expectedBytesSnapshot = 0;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        complete = !g_uploadedMotionActive && !g_uploadedEmergencyPending &&
+                   g_uploadedExpectedBytes > 0 &&
+                   g_uploadedReceivedBytes == g_uploadedExpectedBytes;
+        if (complete) {
+            framesToValidate = g_uploadedFrameCount;
+            expectedBytesSnapshot = g_uploadedExpectedBytes;
+        }
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        if (!complete) return false;
+
+        // COMMIT時に全フレームを検証し、不正値をサーボへ渡さない。
+        bool valid = true;
+        for (uint16_t f = 0; f < framesToValidate && valid; ++f) {
+            const size_t base = static_cast<size_t>(f) * UPLOAD_FRAME_BYTES;
+            const uint16_t duration = static_cast<uint16_t>(g_uploadedMotionBytes[base]) |
+                (static_cast<uint16_t>(g_uploadedMotionBytes[base + 1]) << 8);
+            const uint8_t mode = g_uploadedMotionBytes[base + 2];
+            if (duration < 20 || mode > 1) {
+                valid = false;
+                break;
+            }
+            for (int i = 0; i < 19; ++i) {
+                const size_t offset = base + 3 + static_cast<size_t>(i) * 2;
+                const int16_t target = static_cast<int16_t>(
+                    static_cast<uint16_t>(g_uploadedMotionBytes[offset]) |
+                    (static_cast<uint16_t>(g_uploadedMotionBytes[offset + 1]) << 8));
+                if (target < -1 || (target > 0 && target < 3500) || target > 11500) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        bool accepted = false;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        if (!g_uploadedMotionActive && !g_uploadedEmergencyPending &&
+            g_uploadedExpectedBytes == expectedBytesSnapshot &&
+            g_uploadedFrameCount == framesToValidate &&
+            g_uploadedExpectedBytes > 0 &&
+            g_uploadedReceivedBytes == g_uploadedExpectedBytes) {
+            if (valid) {
+                g_uploadedMotionReady = true;
+                accepted = true;
+            } else {
+                g_uploadedMotionReady = false;
+                g_uploadedExpectedBytes = 0;
+                g_uploadedReceivedBytes = 0;
+                g_uploadedFrameCount = 0;
+            }
+        }
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        return accepted;
+    }
+
+    if (command == UPLOAD_START) {
+        if (length != 1) return false;
+        bool accepted = false;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        if (g_uploadedMotionReady && !g_uploadedMotionActive &&
+            g_uploadedFrameCount > 0 &&
+            g_uploadedReceivedBytes == g_uploadedExpectedBytes) {
+            g_uploadedEmergencyLatched = false;
+            g_uploadedEmergencyPending = false;
+            g_uploadedMotionActive = true;
+            ++g_uploadedMotionGeneration;
+            accepted = true;
+        }
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        return accepted;
+    }
+
+    if (command == UPLOAD_EMERGENCY_STOP) {
+        if (length != 1) return false;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        g_uploadedEmergencyPending = true;
+        g_uploadedMotionReady = false;
+        g_uploadedExpectedBytes = 0;
+        g_uploadedReceivedBytes = 0;
+        g_uploadedFrameCount = 0;
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        return true;
+    }
+    return false;
+}
+
+bool uploadedMotionOwnsRobot() {
+    portENTER_CRITICAL(&g_uploadedMotionMux);
+    const bool result = g_uploadedMotionActive || g_uploadedEmergencyPending;
+    portEXIT_CRITICAL(&g_uploadedMotionMux);
+    return result;
+}
+
+bool uploadedMotionEmergencyLatched() {
+    portENTER_CRITICAL(&g_uploadedMotionMux);
+    const bool result = g_uploadedEmergencyLatched;
+    portEXIT_CRITICAL(&g_uploadedMotionMux);
+    return result;
+}
+
+static void freeAllServosForEmergency() {
+    for (int i = 0; i < 19; ++i) {
+        if (ServoArray[i] != nullptr) ServoArray[i]->setPosFree();
+    }
+}
+
+void processUploadedMotion() {
+    bool emergency = false;
+    bool active = false;
+    uint32_t generation = 0;
+    uint16_t frameCount = 0;
+    portENTER_CRITICAL(&g_uploadedMotionMux);
+    if (g_uploadedEmergencyPending) {
+        g_uploadedEmergencyPending = false;
+        g_uploadedMotionActive = false;
+        g_uploadedEmergencyLatched = true;
+        emergency = true;
+    }
+    active = g_uploadedMotionActive;
+    generation = g_uploadedMotionGeneration;
+    frameCount = g_uploadedFrameCount;
+    portEXIT_CRITICAL(&g_uploadedMotionMux);
+
+    if (emergency) {
+        stopTeachingMode();
+        freeAllServosForEmergency();
+        Serial.println("[MOTION] EMERGENCY STOP: playback aborted, all servos FREE; autonomous motions latched off.");
+        return;
+    }
+    if (!active) return;
+
+    if (!deviceConnected) {
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        g_uploadedMotionActive = false;
+        g_uploadedEmergencyLatched = true;
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        stopTeachingMode();
+        freeAllServosForEmergency();
+        Serial.println("[MOTION] BLE disconnected during playback: stopped and freed all servos.");
+        return;
+    }
+
+    static uint32_t localGeneration = 0;
+    static uint16_t frameIndex = 0;
+    static bool frameInitialized = false;
+    static uint32_t frameStartMs = 0;
+    static int32_t startIcs[19] = {0};
+
+    if (localGeneration != generation) {
+        localGeneration = generation;
+        frameIndex = 0;
+        frameInitialized = false;
+    }
+    if (frameIndex >= frameCount) {
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        g_uploadedMotionActive = false;
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        Serial.println("[MOTION] Uploaded motion completed.");
+        frameInitialized = false;
+        return;
+    }
+
+    const uint8_t* frame = g_uploadedMotionBytes + (static_cast<size_t>(frameIndex) * UPLOAD_FRAME_BYTES);
+    uint16_t duration = static_cast<uint16_t>(frame[0]) |
+                        (static_cast<uint16_t>(frame[1]) << 8);
+    if (duration < 20) duration = 20;
+    const bool snap = frame[2] == 1;
+
+    if (!frameInitialized) {
+        frameStartMs = millis();
+        for (int i = 0; i < 19; ++i) {
+            const size_t offset = 3 + (static_cast<size_t>(i) * 2);
+            const int16_t target = static_cast<int16_t>(static_cast<uint16_t>(frame[offset]) |
+                                     (static_cast<uint16_t>(frame[offset + 1]) << 8));
+            startIcs[i] = (ServoArray[i] != nullptr) ? ServoArray[i]->getLastSetPosIcs() : 0;
+            if (ServoArray[i] == nullptr || target == -1) continue;
+            if (target == 0) {
+                ServoArray[i]->setPosFree();
+            } else if (snap) {
+                ServoArray[i]->setPosIcs(static_cast<uint16_t>(target), false);
+            }
+        }
+        frameInitialized = true;
+    }
+
+    const uint32_t elapsed = millis() - frameStartMs;
+    const float t = (elapsed >= duration) ? 1.0f : (static_cast<float>(elapsed) / static_cast<float>(duration));
+    const float eased = t * t * (3.0f - 2.0f * t);
+    if (!snap) {
+        for (int i = 0; i < 19; ++i) {
+            if (ServoArray[i] == nullptr) continue;
+            const size_t offset = 3 + (static_cast<size_t>(i) * 2);
+            const int16_t target = static_cast<int16_t>(static_cast<uint16_t>(frame[offset]) |
+                                     (static_cast<uint16_t>(frame[offset + 1]) << 8));
+            if (target <= 0) continue; // -1=ignore, 0=FREE (frame entryで処理済み)
+            int32_t start = startIcs[i];
+            if (start <= 0 || start == 0xFFFF) start = target;
+            const int32_t pos = static_cast<int32_t>(start + ((static_cast<int32_t>(target) - start) * eased));
+            ServoArray[i]->setPosIcs(static_cast<uint16_t>(pos), false);
+        }
+    }
+
+    if (elapsed >= duration) {
+        if (!snap) {
+            for (int i = 0; i < 19; ++i) {
+                if (ServoArray[i] == nullptr) continue;
+                const size_t offset = 3 + (static_cast<size_t>(i) * 2);
+                const int16_t target = static_cast<int16_t>(static_cast<uint16_t>(frame[offset]) |
+                                         (static_cast<uint16_t>(frame[offset + 1]) << 8));
+                if (target > 0) ServoArray[i]->setPosIcs(static_cast<uint16_t>(target), false);
+            }
+        }
+        ++frameIndex;
+        frameInitialized = false;
+    }
+}
+
 
 bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,const float *armAngle_zero,const float *armAngle_tar1);
 
@@ -343,6 +667,16 @@ namespace motion {
     bool jump::canStart(){
         return false;//現在未割り当て。
     }
+
+    bool ServoStateDeBug::canStart(){
+        return true;//常時起動
+    }
+
+    bool TeachingMode::canStart() {
+        // TeachingModeはtaskManagerから優先実行される。通常の排他制御経路向けの判定。
+        return deviceConnected && g_teachModeActive && g_teachCmdPending;
+    }
+
 /**************************************************** */
 
     bool walk1::motionLoop() {
@@ -1414,7 +1748,8 @@ namespace motion {
 
         switch (taskPhase) {
             case 0:
-                Serial.printf("standUp!\n");
+                Serial.printf("attack_Medium_right!\n");
+                VIB();//バイブレーション
                 taskPhase = 10;
                 currentStep = 0;
                 arrIndex = 0;
@@ -1651,7 +1986,7 @@ namespace motion {
 
         bool push_circle = Dualshock4.data.button.circle;
 
-        while(!Dualshock4.data.button.cross){
+        while(!Dualshock4.data.button.cross && !g_teachModeActive){
             Serial.printf("DebugMode!\n");
 
             if(push_circle==0 && Dualshock4.data.button.circle==1){
@@ -1780,6 +2115,122 @@ namespace motion {
         return true;
     }
 
+
+    
+    bool ServoStateDeBug::motionLoop(){
+        if (!deviceConnected) {
+            return false;
+        }
+
+        // 1フレーム = [frameNo:2byte][servo0..18: 19 * 2byte] = 40byte
+        // 全19軸の順番は固定なので、サーボIDは毎回送信しない。
+        // 各位置値は符号なし16bit、リトルエンディアン。
+        static uint16_t frameNumber = 0;
+        uint8_t txBuffer[40];
+
+        txBuffer[0] = static_cast<uint8_t>(frameNumber & 0xFF);
+        txBuffer[1] = static_cast<uint8_t>((frameNumber >> 8) & 0xFF);
+
+        for (int i = 0; i < 19; ++i) {
+            uint16_t pos = 0;
+            if (ServoArray[i] != nullptr) {
+                pos = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
+            }
+
+            const int offset = 2 + i * 2;
+            txBuffer[offset]     = static_cast<uint8_t>(pos & 0xFF);
+            txBuffer[offset + 1] = static_cast<uint8_t>((pos >> 8) & 0xFF);
+        }
+
+        sendBLE(txBuffer, sizeof(txBuffer));
+        ++frameNumber; // uint16_tなので65535の次は0に戻る
+
+        return false; // 次のメインループで次フレームを生成する
+    }
+
+    bool TeachingMode::motionLoop() {
+        uint8_t request[45] = {0};
+        portENTER_CRITICAL(&g_teachCmdMux);
+        if (!g_teachCmdPending || g_teachCmdProcessing || g_teachRxLength != sizeof(request)) {
+            portEXIT_CRITICAL(&g_teachCmdMux);
+            return false;
+        }
+        g_teachCmdProcessing = true;
+        memcpy(request, g_teachRxBuffer, sizeof(request));
+        portEXIT_CRITICAL(&g_teachCmdMux);
+
+        Serial.println("[TeachingMode] Processing one blocking teaching request.");
+
+        // Request layout:
+        // [0]=0x01, [1..3]=CommandMask, [4..6]=FeedbackMask,
+        // [7..44]=19 x uint16 little-endian ICS.
+        const uint32_t commandMask = static_cast<uint32_t>(request[1]) |
+                                     (static_cast<uint32_t>(request[2]) << 8) |
+                                     (static_cast<uint32_t>(request[3]) << 16);
+        const uint32_t fbModeMask = static_cast<uint32_t>(request[4]) |
+                                   (static_cast<uint32_t>(request[5]) << 8) |
+                                   (static_cast<uint32_t>(request[6]) << 16);
+
+        // Response: [0x01][ErrorMask:3B][FeedbackAngles:19*2B] = 42 bytes.
+        uint8_t response[42] = {0};
+        response[0] = 0x01;
+        uint32_t errorMask = 0;
+
+        // ブロッキング区間。全軸の指令／FBをこのメインループから順番に実行する。
+        for (int i = 0; i < 19; ++i) {
+            const uint32_t bit = (1UL << i);
+            const size_t angleOffset = 7 + (static_cast<size_t>(i) * 2);
+            uint16_t currentIcs = 0;
+
+            if (ServoArray[i] == nullptr) {
+                if ((fbModeMask & bit) != 0) errorMask |= bit;
+            } else {
+                // CommandMask=0ならその軸の駆動状態を変更しない。
+                if ((commandMask & bit) != 0) {
+                    const uint16_t targetIcs = static_cast<uint8_t>(request[angleOffset]) |
+                                               (static_cast<uint16_t>(static_cast<uint8_t>(request[angleOffset + 1])) << 8);
+                    if (targetIcs == 0) {
+                        ServoArray[i]->setPosFree();
+                    } else {
+                        ServoArray[i]->setPosIcs(targetIcs, false);
+                    }
+                }
+
+                if ((fbModeMask & bit) != 0) {
+                    // 実角度モード。失敗／タイムアウト時はエラービットを立て、指令角度を返す。
+                    auto result = ServoArray[i]->getPosIcs();
+                    if (!result.success) {
+                        errorMask |= bit;
+                        currentIcs = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
+                    } else {
+                        currentIcs = static_cast<uint16_t>(result.value);
+                    }
+                } else {
+                    // 指令角度モード。追加のUART問い合わせは行わない。
+                    currentIcs = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
+                }
+            }
+
+            const size_t responseOffset = 4 + (static_cast<size_t>(i) * 2);
+            response[responseOffset] = static_cast<uint8_t>(currentIcs & 0xFF);
+            response[responseOffset + 1] = static_cast<uint8_t>((currentIcs >> 8) & 0xFF);
+            delay(2);
+        }
+
+        response[1] = static_cast<uint8_t>(errorMask & 0xFF);
+        response[2] = static_cast<uint8_t>((errorMask >> 8) & 0xFF);
+        response[3] = static_cast<uint8_t>((errorMask >> 16) & 0xFF);
+
+        // 処理済みフラグを通知送信前に解除し、次の要求との競合を避ける。
+        portENTER_CRITICAL(&g_teachCmdMux);
+        g_teachCmdPending = false;
+        g_teachCmdProcessing = false;
+        g_teachRxLength = 0;
+        portEXIT_CRITICAL(&g_teachCmdMux);
+
+        sendBLE(response, sizeof(response));
+        return false; // 1要求を完了。ALL_BITを解放する。
+    }
 
     /*****ここまで***** */
 }

@@ -1,33 +1,44 @@
-#include "Declaration.h"
-
 #ifndef ASPROG
 #define ASPROG
 
+#include <Arduino.h>
+#include <esp_gap_bt_api.h>
+#include <LittleFS.h>
+
+// 2次元ベクトル構造体
+struct Vector2 {
+    float x;
+    float y;
+    Vector2(float _x = 0.0f, float _y = 0.0f) : x(_x), y(_y) {}
+};
+
 /**********************************************/
-//補助関数
-int map_controller(int in,int ineRange,int inMin,int inMax,int outMin,int outMax);
+// 補助関数群
+int map_controller(int in, int ineRange, int inMin, int inMax, int outMin, int outMax);
 
 void bondReset();
 
-class FrameLimiter {//処理間隔の一定
-    public:
-        unsigned long interval_ms;
-        unsigned long next_target_ms;
+class FrameLimiter {
+public:
+    unsigned long interval_ms;
+    unsigned long next_target_ms;
 
-        // 1. 指定時間設定（間隔変更時にカウンタをリセット）
-        void setInterval(unsigned long interval);
-    private:
+    // 指定時間設定（間隔変更時にカウンタをリセット）
+    void setInterval(unsigned long interval);
 
-        // 2. 指定時間待ち（指定時間未満なら待機、超過ならそのまま通過）
-        void wait();
+private:
+    // 指定時間待ち
+    void wait();
 
-        // 3. 時間更新（処理終了時に次回の目標時間を登録）
-        void update();
-    public:
-        void sync();
+    // 時間更新
+    void update();
+
+public:
+    // 同期を行い、目標時刻からの超過時間(ms)を返す（超過なしは 0）
+    long sync();
 };
-
 
 void LittleFS_ini();
 void listFiles();
-#endif
+
+#endif // ASPROG

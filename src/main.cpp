@@ -1,11 +1,17 @@
 #include "Declaration.h"
-#include "AssistiveProgram.h"   //補助プログラム集
-#include "Vector.h"
+#include "AssistiveProgram.h"
 #include "Config.h"
-#include "ConfigDef.h"
 #include "Motion.h"
-
 #include <Wire.h>
+
+#include "BLEManager.h"
+
+// Motion.cppで定義される教示制御状態。BLEの実装詳細はBLEManager.cppに隔離する。
+extern volatile bool g_teachCmdPending;
+extern volatile bool g_teachModeActive;
+extern bool uploadedMotionOwnsRobot();
+extern bool uploadedMotionEmergencyLatched();
+extern void processUploadedMotion();
 
 // MPU6886 I2C設定
 #define MPU6886_ADDRESS 0x68
@@ -110,26 +116,26 @@ inline void checkMemoryUsage(unsigned long intervalMs = 1000) {
 }
 
 
-bool runExclusiveTask(motionBase* motion) {
-    static char usingPartsBit = 0;
+static char g_usingPartsBit = 0;
 
+bool runExclusiveTask(motionBase* motion) {
     if (motion->isActive) {
         // 実行中の場合：モーションを継続し、終了したら解放
         if (!motion->motionLoop()) {
             motion->isActive = false;
-            usingPartsBit &= ~(motion->motionArrUsingBit);
+            g_usingPartsBit &= ~(motion->motionArrUsingBit);
         }
         return true;
     } 
-    else if (motion->canStart() && ((usingPartsBit & motion->motionArrUsingBit) == 0)) {
+    else if (motion->canStart() && ((g_usingPartsBit & motion->motionArrUsingBit) == 0)) {
         // 停止中で、リソースが空いている場合：起動条件を満たしていれば開始
         motion->isActive = true;
-        usingPartsBit |= motion->motionArrUsingBit;
+        g_usingPartsBit |= motion->motionArrUsingBit;
         
         // 初回実行
         if (!motion->motionLoop()) {
             motion->isActive = false;
-            usingPartsBit &= ~(motion->motionArrUsingBit);
+            g_usingPartsBit &= ~(motion->motionArrUsingBit);
         }
         return true;
     }
@@ -137,72 +143,70 @@ bool runExclusiveTask(motionBase* motion) {
 }
 
 void taskManager() {
-    for(int i = 0; i < motionList::motionArrNum; i++) {
-        // オブジェクトのポインタを丸ごと渡す
+    static bool wasTeachingMode = false;
+
+    // PCから全フレーム受信済みのモーションを最優先で実行する。
+    // 再生中は既存モーションを停止して全軸を占有し、BLEへ1フレームずつ送らない。
+    if (uploadedMotionOwnsRobot()) {
+        for (int i = 0; i < motionList::motionArrNum; ++i) {
+            motionList::motionArr[i]->isActive = false;
+        }
+        g_usingPartsBit = 0;
+        wasTeachingMode = false;
+        processUploadedMotion();
+        return;
+    }
+
+    // 緊急停止後は自律モーションをラッチ停止。PCが明示的にTX教示を開始すれば手動制御は許可する。
+    if (uploadedMotionEmergencyLatched()) {
+        for (int i = 0; i < motionList::motionArrNum; ++i) {
+            motionList::motionArr[i]->isActive = false;
+        }
+        g_usingPartsBit = 0;
+        wasTeachingMode = false;
+        if (g_teachModeActive && deviceConnected && g_teachCmdPending) {
+            motion::TeachingMode_inst.motionLoop();
+        }
+        return;
+    }
+
+    // 教示中は他のモーションを停止・抑止し、要求をメインループ内でブロッキング処理する。
+    if (g_teachModeActive && deviceConnected) {
+        if (!wasTeachingMode) {
+            for (int i = 0; i < motionList::motionArrNum; ++i) {
+                motionList::motionArr[i]->isActive = false;
+            }
+            g_usingPartsBit = 0;
+            wasTeachingMode = true;
+        }
+
+        if (g_teachCmdPending) {
+            motion::TeachingMode_inst.motionLoop();
+        }
+        return; // この間は通常モーションと定期テレメトリを動かさない。
+    }
+
+    if (wasTeachingMode) {
+        for (int i = 0; i < motionList::motionArrNum; ++i) {
+            motionList::motionArr[i]->isActive = false;
+        }
+        g_usingPartsBit = 0;
+        wasTeachingMode = false;
+    }
+
+    for (int i = 0; i < motionList::motionArrNum; ++i) {
         runExclusiveTask(motionList::motionArr[i]);
     }
 }
-
-/*
-void taskManager_bu(){//タスク管理。
-    bool active=0;
-
-    uint32_t button_bits = 0;
-    memcpy(&button_bits, &Dualshock4.data.button, sizeof(Dualshock4.data.button));
-    ps4_button_t &ps4Button = Dualshock4.data.button;
-    Serial.println(busyPartsBit, BIN);
-
-    //起き上がり
-    runExclusiveTask(button_bits==TOUCHPAD_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::getUp,motion::posture::getUp);
-
-    //腰回転
-    runExclusiveTask(true,HIP_BIT,activeMotion::posture::hip,motion::posture::hip);
-
-    //歩行モーション
-    int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
-
-    //通常歩行
-    runExclusiveTask((stick_ly > 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walk1,motion::walk::walk1);
-    //通常歩行
-    runExclusiveTask((stick_ly < 0) && !(ps4Button.l3),LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkBack,motion::walk::walkBack);
-
-    //横歩行
-    runExclusiveTask(ps4Button.right || ps4Button.left,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::walkY,motion::walk::walkY);
-
-    //姿勢を低く　攻撃時用
-    runExclusiveTask(ps4Button.down,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::lowerPos,motion::posture::lowerPos);
-
-    //回転
-    runExclusiveTask(button_bits == L3_BIT,LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::walk::turn,motion::walk::turn);
-
-    //攻撃モーション
-    active += runExclusiveTask(ps4Button.l1,LEFT_ARM_BIT,activeMotion::posture::battle::attack_Light_left,motion::posture::battle::attack_Light_left);
-    active += runExclusiveTask(ps4Button.l2,LEFT_ARM_BIT,activeMotion::posture::battle::attack_Medium_left,motion::posture::battle::attack_Medium_left);
-
-    active += runExclusiveTask(ps4Button.r1,RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Light_right,motion::posture::battle::attack_Light_right);
-    active += runExclusiveTask(ps4Button.r2,RIGHT_ARM_BIT,activeMotion::posture::battle::attack_Medium_right,motion::posture::battle::attack_Medium_right);
-
-    //攻撃モーションがない時に実行される。実質LEDを白色に戻す担当者
-    runExclusiveTask(!active,0,activeMotion::posture::nop,motion::posture::nop);
-
-    //姿勢を正す。 強制移行可能
-    runExclusiveTask(button_bits == SHARE_BIT,0,activeMotion::posture::pose,motion::posture::pose);
-    runExclusiveTask(button_bits == OPTIONS_BIT,0,activeMotion::posture::taunt,motion::posture::taunt);
-
-    //デバッグモード 強制移行可能　[ブロッキング]
-    runExclusiveTask(button_bits == PS_BIT,0,activeMotion::posture::LOCK_DebugMode,motion::posture::LOCK_DebugMode);
-
-    //座る ＆　立つ.
-    runExclusiveTask(button_bits==TRIANGLE_BIT,HIP_BIT | LEFT_ARM_BIT | RIGHT_ARM_BIT | LEFT_FOOT_BIT | RIGHT_FOOT_BIT,activeMotion::posture::sit_stand,motion::posture::sit_stand);
-
-}
-    */
 
 FrameLimiter framelim;
 
 void setup() {
     Serial.begin(serialPC_bps);
-    Serial1.begin(serialServo_bps,SERIAL_8E1,rxPin,txPin);
+    Serial1.begin(serialServo_bps, SERIAL_8E1, rxPin, txPin);
+    // 返り値がないサーボ1軸あたりの待ち時間を有限にする。
+    // 実FB対象が複数あっても全ループが無制限に停止しないようにする。
+    Serial1.setTimeout(100);
 
     if (!setupIMU()) {
         Serial.println("IMU Initialization Failed!");
@@ -212,33 +216,36 @@ void setup() {
     loop2_begin();
     delay(500);
 
+    // ★ 1. 先に PS4 コントローラ（Classic BT）の接続待ち受けを開始
     Dualshock4.begin(Config::ControllerMac);
     bondReset();
-    
 
-    while(1){
-        if(Dualshock4.isConnected()){
+    Serial.println("Waiting for PS4 Controller...");
+    while (1) {
+        if (Dualshock4.isConnected()) {
             Dualshock4.setLed(255, 255, 255);
             Dualshock4.setRumble(0, 255);
             Dualshock4.sendToController();
-            resetRumble(500);   //500ms後に停止。
+            resetRumble(500);
             break;
         }
+        delay(10);
     }
-    // 設定の送信
-    Dualshock4.sendToController();
-    Serial.println("Connected");
+    Serial.println("PS4 Controller Connected!");
 
-    LittleFS_ini();//初期化
-    listFiles();//保存データを一覧表示
+    // ★ 2. PS4 接続完了後に BLE を初期化・アドバタイズ開始
+    setupBLE();
+
+    LittleFS_ini();
+    listFiles();
 
     #ifndef SIMULATION
-        const float offsetDeg[10]={-0.13,1.11,-4.39,3.00,2.26,15.76,1.59,2.63,-6.21,20.00};//-1.485001
-        for(int i=0;i<10;i++){
-            ServoArray[i+9]->setOffsetDeg(offsetDeg[i]);
+        const float offsetDeg[10] = {-0.13, 1.11, -4.39, 3.00, 2.26, 15.76, 1.59, 2.63, -6.21, 20.00};
+        for (int i = 0; i < 10; i++) {
+            ServoArray[i + 9]->setOffsetDeg(offsetDeg[i]);
             delay(5);
         }
-        for(int i=0;i<19;i++){
+        for (int i = 0; i < 19; i++) {
             ServoArray[i]->setStretch(stretch);
             delay(5);
         }
@@ -253,14 +260,11 @@ void setup() {
     Dualshock4.sendToController();
 
     framelim.setInterval(1000 / G_fps);
-
-
 }
-
 
 void loop() {
     taskManager();
-    checkMemoryUsage();
+
     
     updateIMU();
 
@@ -271,9 +275,10 @@ void loop() {
         Serial.println(">Status:-1"); // 裏向き
     }
     
-    framelim.sync();
+    // BLE接続状態の監視と切断後のアドバタイズ再開はBLEモジュールに委譲。
+    updateBLE();
 
-
+    Serial.println(framelim.sync());
 
 }
 
@@ -305,6 +310,7 @@ void loop2(void *p){
                 Dualshock4.sendToController();
             }
         }
+        checkMemoryUsage();
 
         delay(1);
     }
