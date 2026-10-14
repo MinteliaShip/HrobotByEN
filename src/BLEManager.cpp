@@ -11,6 +11,7 @@
 // Motion.cppで実装：BLE callbackから受け取った指令をバッファへ渡す。
 // 外部リンケージを維持するため、匿名namespaceの外で宣言する。
 extern bool queueTeachingCommand(const uint8_t* data, size_t length);
+extern void startTeachingMode();
 extern void stopTeachingMode();
 extern bool handleUploadedMotionCommand(const uint8_t* data, size_t length);
 
@@ -24,20 +25,37 @@ BLEServer* pServer = nullptr;
 BLECharacteristic* pTxCharacteristic = nullptr;
 bool oldDeviceConnected = false;
 
-// GATT callbackからnotify()を直接呼ばない。ACKを短いメールボックスに保存し、
+// GATT callbackからnotify()を直接呼ばない。ACKをFIFOへ積み、
 // loop()側のupdateBLE()から通常テレメトリと同じ実行コンテキストで送る。
+// 緊急停止がデータ転送ACKと重なっても、後から来たACKで前のACKを上書きしない。
 static portMUX_TYPE ackMux = portMUX_INITIALIZER_UNLOCKED;
-static volatile bool ackPending = false;
-static uint8_t ackOpcode = 0;
-static uint8_t ackAccepted = 0;
-static uint16_t ackToken = 0;
+static constexpr uint8_t ACK_QUEUE_CAPACITY = 16;
+struct MotionAckRecord {
+    uint8_t opcode;
+    uint8_t accepted;
+    uint16_t token;
+};
+static MotionAckRecord ackQueue[ACK_QUEUE_CAPACITY] = {};
+static uint8_t ackHead = 0;
+static uint8_t ackTail = 0;
+static uint8_t ackCount = 0;
 
 static void queueMotionAck(uint8_t opcode, bool accepted, uint16_t token) {
     portENTER_CRITICAL(&ackMux);
-    ackOpcode = opcode;
-    ackAccepted = accepted ? 1 : 0;
-    ackToken = token;
-    ackPending = true;
+    if (ackCount < ACK_QUEUE_CAPACITY) {
+        ackQueue[ackTail].opcode = opcode;
+        ackQueue[ackTail].accepted = accepted ? 1 : 0;
+        ackQueue[ackTail].token = token;
+        ackTail = static_cast<uint8_t>((ackTail + 1) % ACK_QUEUE_CAPACITY);
+        ++ackCount;
+    } else {
+        // FIFO満杯時は末尾レコードを最新結果で更新する。
+        // 通常のPC実装はACK確認ごとに次パケットを送るため、非常時のみ到達する。
+        const uint8_t last = static_cast<uint8_t>((ackTail + ACK_QUEUE_CAPACITY - 1) % ACK_QUEUE_CAPACITY);
+        ackQueue[last].opcode = opcode;
+        ackQueue[last].accepted = accepted ? 1 : 0;
+        ackQueue[last].token = token;
+    }
     portEXIT_CRITICAL(&ackMux);
 }
 
@@ -52,6 +70,11 @@ public:
         (void)server;
         deviceConnected = false;
         stopTeachingMode();
+        portENTER_CRITICAL(&ackMux);
+        ackHead = 0;
+        ackTail = 0;
+        ackCount = 0;
+        portEXIT_CRITICAL(&ackMux);
     }
 };
 
@@ -62,10 +85,18 @@ public:
         const std::string rxValue = characteristic->getValue();
         if (rxValue.empty()) return;
 
-        // 0x02: 教示モード解除。
+        // RX/TXモードは明示的なコマンド＋論理ACKで切り替える。
+        // 0x02=TX解除(RXへ)、0x03=TX開始。
         if (rxValue.length() == 1 && static_cast<uint8_t>(rxValue[0]) == 0x02) {
             stopTeachingMode();
-            Serial.println("[BLE RX] Teaching mode released by PC.");
+            queueMotionAck(0x02, true, 0);
+            Serial.println("[BLE RX] TX teaching mode released by PC.");
+            return;
+        }
+        if (rxValue.length() == 1 && static_cast<uint8_t>(rxValue[0]) == 0x03) {
+            startTeachingMode();
+            queueMotionAck(0x03, true, 0);
+            Serial.println("[BLE RX] TX teaching mode enabled by PC.");
             return;
         }
 
@@ -82,10 +113,13 @@ public:
             }
 
             // ATT write success is not enough: the PC also needs the firmware's logical result.
-            const uint16_t token = (rxValue.length() >= 3)
-                ? static_cast<uint16_t>(static_cast<uint8_t>(rxValue[1]) |
-                    (static_cast<uint16_t>(static_cast<uint8_t>(rxValue[2])) << 8))
-                : 0;
+            uint16_t token = 0;
+            // 0x30はフレーム数、0x31はデータオフセットをACK tokenに含める。
+            // 0x34の3byte軸マスクはtokenではない。
+            if ((opcode == 0x30 || opcode == 0x31) && rxValue.length() >= 3) {
+                token = static_cast<uint16_t>(static_cast<uint8_t>(rxValue[1]) |
+                    (static_cast<uint16_t>(static_cast<uint8_t>(rxValue[2])) << 8));
+            }
             queueMotionAck(opcode, accepted, token);
             return;
         }
@@ -168,16 +202,18 @@ void sendBLE(uint8_t* data, size_t length) {
 }
 
 void updateBLE() {
-    // Motionコマンドの論理ACKをメインループから送信する。
+    // Motionコマンドの論理ACKをFIFOから1件ずつ送る。
     uint8_t ack[5] = {0x35, 0, 0, 0, 0};
     bool hasAck = false;
     portENTER_CRITICAL(&ackMux);
-    if (ackPending) {
-        ack[1] = ackOpcode;
-        ack[2] = ackAccepted;
-        ack[3] = static_cast<uint8_t>(ackToken & 0xFF);
-        ack[4] = static_cast<uint8_t>((ackToken >> 8) & 0xFF);
-        ackPending = false;
+    if (ackCount > 0) {
+        const MotionAckRecord record = ackQueue[ackHead];
+        ackHead = static_cast<uint8_t>((ackHead + 1) % ACK_QUEUE_CAPACITY);
+        --ackCount;
+        ack[1] = record.opcode;
+        ack[2] = record.accepted;
+        ack[3] = static_cast<uint8_t>(record.token & 0xFF);
+        ack[4] = static_cast<uint8_t>((record.token >> 8) & 0xFF);
         hasAck = true;
     }
     portEXIT_CRITICAL(&ackMux);

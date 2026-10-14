@@ -28,6 +28,12 @@ bool queueTeachingCommand(const uint8_t* data, size_t length) {
     return accepted;
 }
 
+void startTeachingMode() {
+    portENTER_CRITICAL(&g_teachCmdMux);
+    g_teachModeActive = true;
+    portEXIT_CRITICAL(&g_teachCmdMux);
+}
+
 void stopTeachingMode() {
     portENTER_CRITICAL(&g_teachCmdMux);
     g_teachModeActive = false;
@@ -38,6 +44,88 @@ void stopTeachingMode() {
     portEXIT_CRITICAL(&g_teachCmdMux);
 }
 
+// サーボID(0〜18)に対応する部位ビットのルックアップテーブル
+static const BusyPartsBit SERVO_PART_MAP[19] = {
+    RIGHT_ARM_BIT, RIGHT_ARM_BIT, RIGHT_ARM_BIT, // サーボ 0..2
+    LEFT_ARM_BIT,  LEFT_ARM_BIT,  LEFT_ARM_BIT,  // サーボ 3..5
+    RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, // サーボ 6..11
+    LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  // サーボ 12..17
+    HIP_BIT                                      // サーボ 18
+};
+
+/// PROGMEM上のモーション配列を逐次再生する共通関数
+/// @return true: 再生中, false: モーション終了
+bool playCodeMotion(const int16_t motionData[][19], uint16_t totalFrames, char motionArrUsingBit, int &taskPhase, uint16_t &currentFrame) {
+    static uint32_t lastFrameMs = 0;
+
+    switch (taskPhase) {
+        case 0: // 初期化フェーズ
+        {
+            currentFrame = 0;
+            lastFrameMs = 0;
+
+            if (totalFrames == 0) {
+                taskPhase = 0;
+                return false;
+            }
+
+            taskPhase = 1;
+            break;
+        }
+
+        case 1: // 逐次フレーム再生フェーズ
+        {
+            if (currentFrame >= totalFrames) {
+                taskPhase = 2; // 全フレームの再生完了
+                break;
+            }
+
+            // G_fps に基づく1フレームあたりのインターバル(ms)を計算 (例: 40FPSなら 25ms)
+            uint32_t frameIntervalMs = 1000 / G_fps;
+            uint32_t now = millis();
+
+            // 指定時間が経過するまで次のフレームに進めない
+            if (currentFrame > 0 && (now - lastFrameMs < frameIntervalMs)) {
+                break; // 時間未到達のため今回はスキップ
+            }
+
+            lastFrameMs = now;
+
+            // PROGMEMから現在の1フレーム（19軸分）データを読み出し
+            int16_t currentPos[19];
+            memcpy_P(currentPos, motionData[currentFrame], sizeof(currentPos));
+
+            // 自クラスの所有権限（motionArrUsingBit）に基づく有効サーボマスクを作成
+            uint32_t myAuthorityMask = 0;
+            for (int i = 0; i < 19; i++) {
+                if (motionArrUsingBit & SERVO_PART_MAP[i]) {
+                    myAuthorityMask |= (1UL << i);
+                }
+            }
+
+            // 出力指示
+            for (int i = 0; i < 19; i++) {
+                // 1. 自クラスが所有する部位であること
+                // 2. モーションデータ側が -1 (無視) でないこと
+                if ((myAuthorityMask & (1UL << i)) && currentPos[i] >= 0) {
+                    if (ServoArray[i] != nullptr) {
+                        ServoArray[i]->setPosIcs(static_cast<uint16_t>(currentPos[i]), false);
+                    }
+                }
+            }
+
+            currentFrame++;
+            break;
+        }
+
+        case 2: // クリーンアップ・終了フェーズ
+            taskPhase = 0;
+            currentFrame = 0;
+            return false; // モーション完了
+    }
+
+    return true; // 再生継続中
+}
 // ==============================================================
 // BLE事前転送モーション。1フレーム41byte: duration(uint16 LE), mode(uint8), ICS[19](int16 LE)
 // mode 0=なめらか / 1=イチギメ。角度 -1=無視、0=FREE、それ以外=ICS指令。
@@ -50,6 +138,8 @@ static constexpr uint8_t UPLOAD_EMERGENCY_STOP = 0x34;
 static constexpr size_t UPLOAD_FRAME_BYTES = 41;
 static constexpr uint16_t UPLOAD_MAX_FRAMES = 100;
 static constexpr size_t UPLOAD_MAX_BYTES = UPLOAD_FRAME_BYTES * UPLOAD_MAX_FRAMES;
+static constexpr char UPLOAD_MOTION_PATH[] = "/uploaded_motion.bin";
+static constexpr uint32_t ALL_SERVO_MASK = (1UL << 19) - 1UL;
 
 static uint8_t g_uploadedMotionBytes[UPLOAD_MAX_BYTES];
 static uint16_t g_uploadedFrameCount = 0;
@@ -59,6 +149,7 @@ static volatile bool g_uploadedMotionReady = false;
 static volatile bool g_uploadedMotionActive = false;
 static volatile bool g_uploadedEmergencyPending = false;
 static volatile bool g_uploadedEmergencyLatched = false;
+static volatile uint32_t g_uploadedEmergencyServoMask = ALL_SERVO_MASK;
 static volatile uint32_t g_uploadedMotionGeneration = 0;
 static portMUX_TYPE g_uploadedMotionMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -141,6 +232,18 @@ bool handleUploadedMotionCommand(const uint8_t* data, size_t length) {
             }
         }
 
+        // COMMIT前に不正値を検査し、検証済みデータをLittleFSへ永続化する。
+        // このハンドラはBLE受信コールバックから呼ばれるため、ここではサーボUARTへ触れない。
+        bool saved = false;
+        if (valid) {
+            File out = LittleFS.open(UPLOAD_MOTION_PATH, "w");
+            if (out) {
+                const size_t written = out.write(g_uploadedMotionBytes, expectedBytesSnapshot);
+                out.close();
+                saved = (written == expectedBytesSnapshot);
+            }
+        }
+
         bool accepted = false;
         portENTER_CRITICAL(&g_uploadedMotionMux);
         if (!g_uploadedMotionActive && !g_uploadedEmergencyPending &&
@@ -148,7 +251,7 @@ bool handleUploadedMotionCommand(const uint8_t* data, size_t length) {
             g_uploadedFrameCount == framesToValidate &&
             g_uploadedExpectedBytes > 0 &&
             g_uploadedReceivedBytes == g_uploadedExpectedBytes) {
-            if (valid) {
+            if (valid && saved) {
                 g_uploadedMotionReady = true;
                 accepted = true;
             } else {
@@ -159,29 +262,67 @@ bool handleUploadedMotionCommand(const uint8_t* data, size_t length) {
             }
         }
         portEXIT_CRITICAL(&g_uploadedMotionMux);
+        if (valid && !saved) {
+            Serial.println("[MOTION] LittleFS save failed; playback was not armed.");
+        }
         return accepted;
     }
 
     if (command == UPLOAD_START) {
         if (length != 1) return false;
+        size_t expectedBytes = 0;
+        uint16_t expectedFrames = 0;
+        bool canStart = false;
+        portENTER_CRITICAL(&g_uploadedMotionMux);
+        canStart = g_uploadedMotionReady && !g_uploadedMotionActive &&
+                   !g_uploadedEmergencyPending && g_uploadedFrameCount > 0 &&
+                   g_uploadedReceivedBytes == g_uploadedExpectedBytes;
+        expectedBytes = g_uploadedExpectedBytes;
+        expectedFrames = g_uploadedFrameCount;
+        portEXIT_CRITICAL(&g_uploadedMotionMux);
+        if (!canStart || expectedBytes == 0 || expectedBytes > UPLOAD_MAX_BYTES) return false;
+
+        // 実行データをファイルシステムから読み直す。RAM上の転送バッファをそのまま
+        // 再生するのではなく、保存に成功したファイルが完全であることを確認して開始する。
+        File in = LittleFS.open(UPLOAD_MOTION_PATH, "r");
+        if (!in || in.size() != expectedBytes) {
+            if (in) in.close();
+            return false;
+        }
+        const size_t readBytes = in.read(g_uploadedMotionBytes, expectedBytes);
+        in.close();
+        if (readBytes != expectedBytes) return false;
+
         bool accepted = false;
         portENTER_CRITICAL(&g_uploadedMotionMux);
         if (g_uploadedMotionReady && !g_uploadedMotionActive &&
-            g_uploadedFrameCount > 0 &&
-            g_uploadedReceivedBytes == g_uploadedExpectedBytes) {
+            !g_uploadedEmergencyPending && g_uploadedFrameCount == expectedFrames &&
+            g_uploadedExpectedBytes == expectedBytes &&
+            g_uploadedReceivedBytes == expectedBytes) {
             g_uploadedEmergencyLatched = false;
             g_uploadedEmergencyPending = false;
+            g_uploadedMotionReady = false;
             g_uploadedMotionActive = true;
             ++g_uploadedMotionGeneration;
             accepted = true;
         }
         portEXIT_CRITICAL(&g_uploadedMotionMux);
+        if (accepted) Serial.printf("[MOTION] Loaded %u frames from LittleFS and started playback.\n", expectedFrames);
         return accepted;
     }
 
     if (command == UPLOAD_EMERGENCY_STOP) {
-        if (length != 1) return false;
+        // 新形式は [0x34][ServoMask:3B]。旧形式1byteは全軸FREEとして互換維持。
+        if (length != 1 && length != 4) return false;
+        uint32_t servoMask = ALL_SERVO_MASK;
+        if (length == 4) {
+            servoMask = static_cast<uint32_t>(data[1]) |
+                        (static_cast<uint32_t>(data[2]) << 8) |
+                        (static_cast<uint32_t>(data[3]) << 16);
+            servoMask &= ALL_SERVO_MASK;
+        }
         portENTER_CRITICAL(&g_uploadedMotionMux);
+        g_uploadedEmergencyServoMask = servoMask;
         g_uploadedEmergencyPending = true;
         g_uploadedMotionReady = false;
         g_uploadedExpectedBytes = 0;
@@ -207,22 +348,31 @@ bool uploadedMotionEmergencyLatched() {
     return result;
 }
 
-static void freeAllServosForEmergency() {
+static void freeServosForEmergency(uint32_t servoMask) {
     for (int i = 0; i < 19; ++i) {
+        if ((servoMask & (1UL << i)) == 0) continue;
         if (ServoArray[i] != nullptr) ServoArray[i]->setPosFree();
     }
+}
+
+static void sendUploadedMotionEvent(uint8_t status) {
+    // 0x36: [status] 0=完了 / 1=緊急停止 / 2=BLE切断停止
+    uint8_t eventPacket[2] = {0x36, status};
+    sendBLE(eventPacket, sizeof(eventPacket));
 }
 
 void processUploadedMotion() {
     bool emergency = false;
     bool active = false;
     uint32_t generation = 0;
+    uint32_t emergencyServoMask = ALL_SERVO_MASK;
     uint16_t frameCount = 0;
     portENTER_CRITICAL(&g_uploadedMotionMux);
     if (g_uploadedEmergencyPending) {
         g_uploadedEmergencyPending = false;
         g_uploadedMotionActive = false;
         g_uploadedEmergencyLatched = true;
+        emergencyServoMask = g_uploadedEmergencyServoMask;
         emergency = true;
     }
     active = g_uploadedMotionActive;
@@ -232,8 +382,9 @@ void processUploadedMotion() {
 
     if (emergency) {
         stopTeachingMode();
-        freeAllServosForEmergency();
-        Serial.println("[MOTION] EMERGENCY STOP: playback aborted, all servos FREE; autonomous motions latched off.");
+        freeServosForEmergency(emergencyServoMask);
+        Serial.println("[MOTION] EMERGENCY STOP: playback aborted; selected enabled servos freed.");
+        sendUploadedMotionEvent(1);
         return;
     }
     if (!active) return;
@@ -244,8 +395,9 @@ void processUploadedMotion() {
         g_uploadedEmergencyLatched = true;
         portEXIT_CRITICAL(&g_uploadedMotionMux);
         stopTeachingMode();
-        freeAllServosForEmergency();
+        freeServosForEmergency(ALL_SERVO_MASK);
         Serial.println("[MOTION] BLE disconnected during playback: stopped and freed all servos.");
+        sendUploadedMotionEvent(2);
         return;
     }
 
@@ -266,6 +418,7 @@ void processUploadedMotion() {
         portEXIT_CRITICAL(&g_uploadedMotionMux);
         Serial.println("[MOTION] Uploaded motion completed.");
         frameInitialized = false;
+        sendUploadedMotionEvent(0);
         return;
     }
 
@@ -323,7 +476,6 @@ void processUploadedMotion() {
         frameInitialized = false;
     }
 }
-
 
 bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,const float *armAngle_zero,const float *armAngle_tar1);
 
@@ -612,10 +764,10 @@ namespace motion {
 
     // --- 攻撃系 ---
     bool attack_Light_left::canStart() { return Dualshock4.data.button.l1; }
-    bool attack_Medium_left::canStart() { return Dualshock4.data.button.l2; }
+    bool attack_Medium_left::canStart() { return false; }//return Dualshock4.data.button.l2
     bool attack_Light_right::canStart() { return Dualshock4.data.button.r1; }
     bool attack_Medium_right::canStart() { return Dualshock4.data.button.r2; }
-    bool attack_Heavy_1::canStart() { return false; } // 旧実装なし（仮）
+    bool attack_Heavy_1::canStart() { return Dualshock4.data.button.l2; } // 旧実装なし（仮）
     bool attack_Heavy_2::canStart() { return false; } // 旧実装なし（仮）
 
     // --- ポーズ・特殊系 ---
@@ -1786,9 +1938,20 @@ namespace motion {
         return true; // モーション継続中
     }
 
-    bool attack_Heavy_1::motionLoop(){
-        Serial.printf("attack_Heavy_1!\n");
-        return false;
+    bool attack_Heavy_1::motionLoop(){//TEST
+        namespace target = attack_1_Test_2;//ここだけ書き換える。
+        Serial.printf("!\n");
+
+        static int taskPhase = 0;
+        static uint16_t currentFrame = 0;
+        
+        return playCodeMotion(
+            target::flameData,
+            target::flameNum,
+            this->motionArrUsingBit,
+            taskPhase,
+            currentFrame
+        );
     }
 
     bool attack_Heavy_2::motionLoop(){
@@ -2037,7 +2200,6 @@ namespace motion {
         for(int i=0;i<9;i++){
             ServoArray[i]->setPosDeg(tarPos[i]);
         }
-
         return false;
     }
 
@@ -2182,10 +2344,13 @@ namespace motion {
             const size_t angleOffset = 7 + (static_cast<size_t>(i) * 2);
             uint16_t currentIcs = 0;
 
-            if (ServoArray[i] == nullptr) {
+            // PC側で無効化されたサーボはCommandMask/FeedbackMaskとも0。
+            // この軸については、存在確認・UART送信・返り値取得をすべて行わない。
+            if (((commandMask | fbModeMask) & bit) == 0) {
+                currentIcs = 0;
+            } else if (ServoArray[i] == nullptr) {
                 if ((fbModeMask & bit) != 0) errorMask |= bit;
             } else {
-                // CommandMask=0ならその軸の駆動状態を変更しない。
                 if ((commandMask & bit) != 0) {
                     const uint16_t targetIcs = static_cast<uint8_t>(request[angleOffset]) |
                                                (static_cast<uint16_t>(static_cast<uint8_t>(request[angleOffset + 1])) << 8);
@@ -2206,7 +2371,6 @@ namespace motion {
                         currentIcs = static_cast<uint16_t>(result.value);
                     }
                 } else {
-                    // 指令角度モード。追加のUART問い合わせは行わない。
                     currentIcs = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
                 }
             }
@@ -2228,7 +2392,9 @@ namespace motion {
         g_teachRxLength = 0;
         portEXIT_CRITICAL(&g_teachCmdMux);
 
-        sendBLE(response, sizeof(response));
+        if (g_teachModeActive && deviceConnected) {
+            sendBLE(response, sizeof(response));
+        }
         return false; // 1要求を完了。ALL_BITを解放する。
     }
 

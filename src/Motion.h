@@ -9,6 +9,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
 #include "FootController.h"
+#include "MotionData.h"
+#include <LittleFS.h>
 
 class motionBase;
 

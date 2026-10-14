@@ -166,6 +166,10 @@ void taskManager() {
         wasTeachingMode = false;
         if (g_teachModeActive && deviceConnected && g_teachCmdPending) {
             motion::TeachingMode_inst.motionLoop();
+        } else if (!g_teachModeActive && deviceConnected) {
+            // 緊急停止ラッチ中でもRX表示用テレメトリは継続する。
+            // 通常の自律モーションは再開しない。
+            motion::ServoStateDeBug_inst.motionLoop();
         }
         return;
     }
@@ -233,11 +237,13 @@ void setup() {
     }
     Serial.println("PS4 Controller Connected!");
 
-    // ★ 2. PS4 接続完了後に BLE を初期化・アドバタイズ開始
-    setupBLE();
-
+    // ファイルシステムを先に初期化し、BLE接続直後にモーション転送が来ても
+    // LittleFSが未マウントの状態でCOMMITされないようにする。
     LittleFS_ini();
     listFiles();
+
+    // ★ 2. PS4接続とLittleFS初期化の完了後にBLE広告を開始
+    setupBLE();
 
     #ifndef SIMULATION
         const float offsetDeg[10] = {-0.13, 1.11, -4.39, 3.00, 2.26, 15.76, 1.59, 2.63, -6.21, 20.00};
