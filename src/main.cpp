@@ -246,10 +246,29 @@ void setup() {
     setupBLE();
 
     #ifndef SIMULATION
-        const float offsetDeg[10] = {-0.13, 1.11, -4.39, 3.00, 2.26, 15.76, 1.59, 2.63, -6.21, 20.00};
-        for (int i = 0; i < 10; i++) {
-            ServoArray[i + 9]->setOffsetDeg(offsetDeg[i]);
-            delay(5);
+        short offsetICS[19] = {
+            7500, // [0] hipServo
+            7500, // [1] leftArmJ1
+            7500, // [2] leftArmJ2
+            7500, // [3] leftArmJ3
+            7500, // [4] leftArmJ4
+            7500, // [5] rightArmJ1
+            7500, // [6] rightArmJ2
+            7500, // [7] rightArmJ3
+            7500, // [8] rightArmJ4
+            7500, // [9] leftFoot1
+            7525, // [10] leftFoot2
+            7601, // [11] leftFoot3
+            7777, // [12] leftFoot4
+            7601, // [13] leftFoot5
+            7500, // [14] rightFoot1
+            7650, // [15] rightFoot2
+            7324, // [16] rightFoot3
+            7198, // [17] rightFoot4
+            7701 // [18] rightFoot5
+        };
+        for (int i = 0; i < 19; i++) {
+            ServoArray[i]->setOffsetIcs(offsetICS[i]);
         }
         for (int i = 0; i < 19; i++) {
             ServoArray[i]->setStretch(stretch);

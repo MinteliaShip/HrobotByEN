@@ -23,8 +23,6 @@ float g_lpfAcc = 1.0f;
 // コントローラのMACアドレス
 const char Config::ControllerMac[18] = "06:02:01:02:05:10";
 
-// PCとの通信のボーレート
-const long Config::bpsPC = 115200;
 
 #ifdef SIMULATION
 HardwareSerial* Config::ServoSerial = &Serial;
