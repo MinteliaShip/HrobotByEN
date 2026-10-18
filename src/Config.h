@@ -15,12 +15,15 @@ extern const int txPin;
 extern const int rxPin;
 extern const int enPin;
 /**********************************************/
-extern const int stretch;
+extern const char stretch;
 extern int G_fps;
 
 extern float NeutralPoseY;
 extern float NeutralPoseX;
 extern float NeutralSpac;
+
+extern float footPoseDefLeft;
+extern float footPoseDefRight;
 
 struct GaitParameters {
   float T;

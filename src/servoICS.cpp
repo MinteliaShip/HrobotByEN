@@ -110,6 +110,8 @@ namespace servoICS {
             lastSetPos_ = ics;
         }
 
+        delayMicroseconds(500);
+
         return sub;
     }
 

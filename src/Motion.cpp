@@ -524,9 +524,6 @@ bool startWalking(GaitParameters &param_p){//静止状態から歩行状態へ�
     switch (taskPhase){
         case 0:
         {
-            leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-            rightFoot.FootMotorInvert(1, 1, 1, 1, -1);
-
             taskPhase = 1;
             break;
         }
@@ -621,8 +618,6 @@ bool endWalking(GaitParameters &param_p) {//歩行状態から静止状態へ移
     switch (taskPhase) {
         case 0:
         {
-            leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-            rightFoot.FootMotorInvert(1, 1, 1, 1, -1);
 
             taskPhase = 1;
             break;
@@ -867,8 +862,7 @@ namespace motion {
                     ServoArray[i]->setStretch(stretch);
                     delay(5);
                 }
-                leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-                rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
+
 
                 taskPhase = 1;
                 break;
@@ -876,7 +870,10 @@ namespace motion {
             case 1:
             {
                 //歩行準備
-                if(!startWalking(param_p))taskPhase = 2;
+                
+                //if(!startWalking(param_p))taskPhase = 2;
+                taskPhase = 2;
+                
                 break;
             }
             case 2:
@@ -998,8 +995,6 @@ namespace motion {
                     ServoArray[i]->setStretch(stretch);
                     delay(5);
                 }
-                leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-                rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
 
                 taskPhase = 1;
                 break;
@@ -1136,9 +1131,6 @@ namespace motion {
                     ServoArray[i]->setStretch(stretch);
                     delay(5);
                 }
-                leftFoot.FootMotorInvert(1, 1, 1, -1, -1);
-                rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
-
                 taskPhase = 1;
                 moveValue = 0;
                 break;
@@ -1146,7 +1138,8 @@ namespace motion {
             case 1:
             {
                 //歩行準備
-                if(!startWalking(param_p))taskPhase = 2;
+                //if(!startWalking(param_p))taskPhase = 2;
+                taskPhase = 2;
                 break;
             }
             case 2:
@@ -1155,9 +1148,6 @@ namespace motion {
                 float ts_left = (float)frame / Fps;
                 // 右足は位相を半周期 (T / 2.0) ずらす
                 float ts_right = fmod(ts_left + (T / 2.0f), T);
-
-
-                
                 
                 moveValue = moveValue + (-(float)Dualshock4.data.button.left + (float)Dualshock4.data.button.right)*0.05;
                 if(moveValue > 1){
@@ -1168,12 +1158,16 @@ namespace motion {
 
                 Serial.printf("Dualshock4.data.button.left:%d Dualshock4.data.button.right:%d moveValue:%f\n",Dualshock4.data.button.left,Dualshock4.data.button.right,moveValue);
 
-                float wd_left = Wd*moveValue;
-                float wd_right = Wd*moveValue;
-
                 // 軌道生成処理 (FootController.cpp の tread 関数を利用)
-                Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
-                Vector2 rightPosXY = rightFoot.tread(h,wd_right,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+                Vector2 leftPosXY = {0,0};
+                Vector2 rightPosXY = {0,0};
+
+                if(moveValue==1){
+                    // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+                    leftPosXY = leftFoot.tread(h,Wd*moveValue,DutyX,DutyY,T,ts_left);
+                }else{
+                    rightPosXY = rightFoot.tread(h,Wd*moveValue,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+                }
 
                 float kick_x_left = 0.0f;
                 float kick_y_left = 0.0f;
@@ -1186,33 +1180,31 @@ namespace motion {
                 // 接地期の終盤で後ろ・下へ押し込む
                 float support_end = DutyX * T / 2.0f;
                 
-                float angle_def = 0;
+                float angle_def = -((30)*PI/360) * moveValue;
 
                 if (ts_left > (support_end - push_window) && ts_left < support_end) {
                     kick_x_left = kickX_left_val - 0;
                     kick_y_left = kickY_left_val + 0;
-                    angle_left = angle_def;
                 }
 
                 if (ts_right > (support_end - push_window) && ts_right < support_end) {
                     kick_x_right = kickX_right_val - 0;
                     kick_y_right = kickY_right_val + 0;
-                    angle_right = angle_def;
                 }
 
                 FootController::Pose leftPose={
-                offsetZ_left-leftPosXY.y - kick_y_left,-Spac-leftPosXY.x  + kick_x_left*moveValue ,0 + offsetX_left,
-                angle_left, 0, 0
+                offsetZ_left-leftPosXY.y,-Spac-leftPosXY.x,0 + offsetX_left,
+                0, 0, 0
                 };
 
                 FootController::Pose rightPose={
-                offsetZ_right-rightPosXY.y - kick_y_right,+Spac-rightPosXY.x + kick_x_right*moveValue,0 + offsetX_right,
-                angle_right, 0, 0
+                offsetZ_right-rightPosXY.y,+Spac-rightPosXY.x ,0 + offsetX_right,
+                0, 0, 0
                 };
 
                 // 逆運動学 (IK) を介して各足のサーボへ指令を出力
-                leftFoot.setTargetPose(leftPose);
-                rightFoot.setTargetPose(rightPose);
+                leftFoot.setTargetPose(leftPose,angle_def);
+                rightFoot.setTargetPose(rightPose,angle_def);
 
                 if(frame < totalFrames){
                     frame++;
@@ -1220,7 +1212,6 @@ namespace motion {
                     frame = 0;
                 }
 
-                int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
                 //行進のコントローラがない場合、または、回転のボタンが押された場合は抜ける。 
                 if((!Dualshock4.data.button.left && !Dualshock4.data.button.right) && (frame>=totalFrames)){//最終フレームで抜けるように
                     taskPhase = 3;
@@ -1277,8 +1268,7 @@ namespace motion {
                     ServoArray[i]->setStretch(stretch);
                     delay(5);
                 }
-                leftFoot.FootMotorInvert(1, 1, 1, -1, 1);
-                rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
+
                 taskPhase = 1;
                 break;
             }
@@ -2138,6 +2128,18 @@ namespace motion {
     bool nop::motionLoop(){
         Dualshock4.setLed(100, 100, 100);
         Dualshock4.sendToController();
+
+        static int count = 0;
+        if(count>G_fps*4){
+            for (int i = 0; i < 19; i++) {
+                ServoArray[i]->setStretch(stretch);
+                delay(1);
+            }
+            count=0;
+        }else{
+            count++;
+        }
+
         Serial.printf(".");
         return false;
     }
@@ -2196,10 +2198,20 @@ namespace motion {
     }
 
     bool pose::motionLoop() {
-        float tarPos[9] = {0.00,0.0,60.00,23.59,-109.79,00.00,60.00,7.96,-99.49};
-        for(int i=0;i<9;i++){
-            ServoArray[i]->setPosDeg(tarPos[i]);
-        }
+        FootController::Pose leftPose={
+        NeutralPoseY+footPoseDefLeft,-NeutralSpac,NeutralPoseX,
+        0, 0, 0
+        };
+
+        FootController::Pose rightPose={
+        NeutralPoseY+footPoseDefRight,+NeutralSpac,NeutralPoseX,
+        0, 0, 0
+        };
+
+        // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+        leftFoot.setTargetPose(leftPose);
+        rightFoot.setTargetPose(rightPose);
+
         return false;
     }
 
@@ -2213,10 +2225,6 @@ namespace motion {
 
     bool jump::motionLoop(){//ジャンプ動作
 
-        float NeutralPoseY=100;
-        float NeutralPoseX=10;
-        float NeutralSpacY=50;
-
         static int taskDelay=0;
 
         static int taskPhase=0;
@@ -2227,12 +2235,12 @@ namespace motion {
             taskDelay=0;
 
             FootController::Pose leftPose={
-            NeutralPoseY+100,-NeutralSpacY*0.5,NeutralPoseX,
+            NeutralPoseY+100,-NeutralSpac*0.5,NeutralPoseX,
             0, 0, 0
             };
 
             FootController::Pose rightPose={
-            NeutralPoseY+100,+NeutralSpacY*0.5,NeutralPoseX,
+            NeutralPoseY+100,+NeutralSpac*0.5,NeutralPoseX,
             0, 0, 0
             };
 
@@ -2256,12 +2264,12 @@ namespace motion {
         case 2:
         {
             FootController::Pose leftPose={
-            NeutralPoseY,-NeutralSpacY,NeutralPoseX,
+            NeutralPoseY,-NeutralSpac,NeutralPoseX,
             0, 0, 0
             };
 
             FootController::Pose rightPose={
-            NeutralPoseY,+NeutralSpacY,NeutralPoseX,
+            NeutralPoseY,+NeutralSpac,NeutralPoseX,
             0, 0, 0
             };
 

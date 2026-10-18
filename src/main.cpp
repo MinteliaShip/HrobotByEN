@@ -246,7 +246,8 @@ void setup() {
     setupBLE();
 
     #ifndef SIMULATION
-        short offsetICS[19] = {
+
+        short ICS_senter[19] = {
             7500, // [0] hipServo
             7500, // [1] leftArmJ1
             7500, // [2] leftArmJ2
@@ -257,18 +258,44 @@ void setup() {
             7500, // [7] rightArmJ3
             7500, // [8] rightArmJ4
             7500, // [9] leftFoot1
-            7525, // [10] leftFoot2
-            7601, // [11] leftFoot3
-            7777, // [12] leftFoot4
-            7601, // [13] leftFoot5
+            7500, // [10] leftFoot2
+            7500, // [11] leftFoot3
+            7500, // [12] leftFoot4
+            7500, // [13] leftFoot5
             7500, // [14] rightFoot1
-            7650, // [15] rightFoot2
-            7324, // [16] rightFoot3
-            7198, // [17] rightFoot4
-            7701 // [18] rightFoot5
+            7500, // [15] rightFoot2
+            7500, // [16] rightFoot3
+            7500, // [17] rightFoot4
+            7500 // [18] rightFoot5
         };
+
+    short ServoArray_pos[19] = {
+        7500, // [0] hipServo
+        7500, // [1] leftArmJ1
+        7500, // [2] leftArmJ2
+        7500, // [3] leftArmJ3
+        7500, // [4] leftArmJ4
+        7500, // [5] rightArmJ1
+        7500, // [6] rightArmJ2
+        7500, // [7] rightArmJ3
+        7500, // [8] rightArmJ4
+        7500, // [9] leftFoot1
+        7676, // [10] leftFoot2
+        7710, // [11] leftFoot3
+        7777, // [12] leftFoot4
+        7600, // [13] leftFoot5
+        7500, // [14] rightFoot1
+        7575, // [15] rightFoot2
+        7299, // [16] rightFoot3
+        7299, // [17] rightFoot4
+        7720 // [18] rightFoot5
+    };
+
+        leftFoot.FootMotorInvert(1, 1, -1, -1, 1);
+        rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
+
         for (int i = 0; i < 19; i++) {
-            ServoArray[i]->setOffsetIcs(offsetICS[i]);
+            ServoArray[i]->setOffsetIcs(ServoArray_pos[i]);
         }
         for (int i = 0; i < 19; i++) {
             ServoArray[i]->setStretch(stretch);
@@ -304,7 +331,6 @@ void loop() {
     updateBLE();
 
     Serial.println(framelim.sync());
-
 }
 
 namespace loop2_task

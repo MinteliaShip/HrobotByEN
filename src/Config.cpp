@@ -9,12 +9,15 @@ const int rxPin = 22;
 const int enPin = 23;
 /**********************************************/
 
-const int stretch = 105;
+const char stretch = 110;
 int G_fps = 40;
 
-float NeutralPoseY = 110;
-float NeutralPoseX = -20;
-float NeutralSpac = 100;
+float NeutralPoseY = 250;
+float NeutralPoseX = -0;
+float NeutralSpac = 120;
+//左右の足の差をここで吸収させる。Def = 差
+float footPoseDefLeft=0;
+float footPoseDefRight=20;
 
 // グローバル変数の実体定義
 bool g_isFaceUp = true;
@@ -22,7 +25,6 @@ float g_lpfAcc = 1.0f;
 
 // コントローラのMACアドレス
 const char Config::ControllerMac[18] = "06:02:01:02:05:10";
-
 
 #ifdef SIMULATION
 HardwareSerial* Config::ServoSerial = &Serial;
@@ -40,51 +42,155 @@ const char Config::hipServoID = 11;
 float Config::lengs8[8] = {9.4, 29.219, 25.4, 120, 120.0, 25.4, 25, 11.5};
 
 GaitParameters Config::MV_X_PARAM{
-    0.7, 50, 150, 0.8, 0.73, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -6.0f, -5.0f, -6.0f, -5.0f, 0.3f
+    0.7,         // T
+    50,          // h
+    150,         // Wd
+    0.8,         // DutyX
+    0.73,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + 3.0f, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + 0.0f, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -6.0f,       // kickX_left
+    -5.0f,       // kickY_left
+    -6.0f,       // kickX_right
+    -5.0f,       // kickY_right
+    0.3f         // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_1Y{
-    1.0, 40, -40, 0.90, 0.85, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -8.0f, -10.0f, -8.0f, -10.0f, 0.15f
+    1.0,         // T
+    40,          // h
+    -40,         // Wd
+    0.90,        // DutyX
+    0.85,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + footPoseDefLeft, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + footPoseDefRight, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -8.0f,       // kickX_left
+    -10.0f,      // kickY_left
+    -8.0f,       // kickX_right
+    -10.0f,      // kickY_right
+    0.15f        // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_FAST_Y{
-    0.3, 25, -80, 0.90, 0.85, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -15.0f, -10.0f, -15.0f, -10.0f, 0.1f
+    0.2,         // T
+    80,          // h
+    -300,         // Wd
+    0.90,        // DutyX
+    0.85,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + footPoseDefLeft, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + footPoseDefRight, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    0.0f,      // kickX_left
+    -10.0f,      // kickY_left
+    0.0f,      // kickX_right
+    -10.0f,      // kickY_right
+    0.2f         // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_TURN{
-    0.3, 60, 180, 0.95, 0.90, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -3.0f, -9.0f, -0.0f, -8.0f, 0.15f
+    0.3,         // T
+    60,          // h
+    180,         // Wd
+    0.95,        // DutyX
+    0.90,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + 3.0f, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + 0.0f, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -3.0f,       // kickX_left
+    -9.0f,       // kickY_left
+    -0.0f,       // kickX_right
+    -8.0f,       // kickY_right
+    0.15f        // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_2{
-    0.9, 52, 70, 0.95, 0.90, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -0.0f, -0.7f, -0.0f, -0.7f, 0.4f
+    0.9,         // T
+    52,          // h
+    70,          // Wd
+    0.95,        // DutyX
+    0.90,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + 3.0f, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + 0.0f, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -0.0f,       // kickX_left
+    -0.7f,       // kickY_left
+    -0.0f,       // kickX_right
+    -0.7f,       // kickY_right
+    0.4f         // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_3{
-    1.0, 30, 50, 0.90, 0.88, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -0.0f, -10.0f, -0.0f, -10.0f, 0.15f
+    1.0,         // T
+    30,          // h
+    50,          // Wd
+    0.90,        // DutyX
+    0.88,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + 3.0f, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + 0.0f, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -0.0f,       // kickX_left
+    -10.0f,      // kickY_left
+    -0.0f,       // kickX_right
+    -10.0f,      // kickY_right
+    0.15f        // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_BACK{
-    1.0, 30, -50, 0.90, 0.88, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -0.0f, -10.0f, -0.0f, -10.0f, 0.15f
+    1.0,         // T
+    30,          // h
+    -50,         // Wd
+    0.90,        // DutyX
+    0.88,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + 3.0f, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + 0.0f, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -0.0f,       // kickX_left
+    -10.0f,      // kickY_left
+    -0.0f,       // kickX_right
+    -10.0f,      // kickY_right
+    0.15f        // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_TEST{
-    2.0, 50, 100, 0.8, 0.8, G_fps, NeutralSpac,
-    NeutralPoseY + 3.0f, NeutralPoseX, NeutralPoseY + 0.0f, NeutralPoseX,
-    -0.0f, -4.0f, -0.0f, -4.0f, 0.3f
+    2.0,         // T
+    50,          // h
+    100,         // Wd
+    0.8,         // DutyX
+    0.8,         // DutyY
+    G_fps,       // Fps
+    NeutralSpac, // Spac
+    NeutralPoseY + 3.0f, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + 0.0f, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    -0.0f,       // kickX_left
+    -4.0f,       // kickY_left
+    -0.0f,       // kickX_right
+    -4.0f,       // kickY_right
+    0.3f         // kickTime
 };
 
 int Config::IDEL_FPS = 10;
