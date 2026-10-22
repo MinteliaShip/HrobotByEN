@@ -1,8 +1,6 @@
 #include "FootController.h"
 
-FootController::footJoint5 FootController::IK(const Pose& targetPose, int mode) {
-    footJoint5 joint;
-
+bool FootController::IK(const Pose& targetPose, int mode, footJoint5& joint) {
     Eigen::Vector4d Pe = {targetPose.X, targetPose.Y, targetPose.Z, 1};
     Eigen::Matrix4d T2_1;
     T2_1 <<
@@ -33,6 +31,15 @@ FootController::footJoint5 FootController::IK(const Pose& targetPose, int mode) 
 
     float LengQ = length(P3_5(0), P3_5(2));
 
+    // 到達可能範囲の判定（脛と腿の2リンク）。範囲外ではacosがNaNになり、
+    // NaNがそのままICS値へ変換されてサーボが暴走するのを防ぐ。
+    const float reachMax = footLeng[3] + footLeng[4];
+    const float reachMin = fabsf(footLeng[3] - footLeng[4]);
+    const float tol = 0.5f; // [mm] 伸び切り付近の丸め誤差許容
+    if (!(LengQ > 1e-3f) || LengQ > reachMax + tol || LengQ < reachMin - tol) {
+        return false;
+    }
+
     if (mode == 0) {
         joint.J3 = atan2(P3_5(2), P3_5(0)) - calcAngle(footLeng[4], footLeng[3], LengQ);
         joint.J4 = PI - calcAngle(LengQ, footLeng[4], footLeng[3]);
@@ -41,7 +48,8 @@ FootController::footJoint5 FootController::IK(const Pose& targetPose, int mode) 
         joint.J4 = -PI + calcAngle(LengQ, footLeng[4], footLeng[3]);
     }
 
-    return joint;
+    return isfinite(joint.J1) && isfinite(joint.J2) && isfinite(joint.J3) &&
+           isfinite(joint.J4) && isfinite(joint.J5);
 }
 
 float FootController::tread_y(float h, float T, float Duty, float ts_) {
@@ -149,26 +157,31 @@ void FootController::setJointAnglesRad(float J1_, float J2_, float J3_, float J4
     );
 }
 
-void FootController::setTargetPose(const Pose& targetPose, float kick, int mode) {
-    footJoint5 joint = IK(targetPose, mode);
+bool FootController::computeJointPos(const Pose& targetPose, float kick, int mode, long out[5]) {
+    footJoint5 joint;
+    if (!IK(targetPose, mode, joint)) return false;
 
 #ifdef SIMULATION
-    setJointAnglesRad(
-        joint.J1,
-        joint.J2,
-        joint.J3,
-        joint.J4 + joint.J3, // 平行リンク補正
-        joint.J5 + kick
-    );
+    out[0] = static_cast<long>(servoICS::fromRad_toIcs(joint.J1));
+    out[1] = static_cast<long>(servoICS::fromRad_toIcs(joint.J2));
+    out[2] = static_cast<long>(servoICS::fromRad_toIcs(joint.J3));
+    out[3] = static_cast<long>(servoICS::fromRad_toIcs(joint.J4 + joint.J3)); // 平行リンク補正
+    out[4] = static_cast<long>(servoICS::fromRad_toIcs(joint.J5 + kick));
 #else
-    setJointAnglesRad(
-        joint.J1 * JointInv[0],
-        joint.J2 * JointInv[1],
-        -joint.J3 * JointInv[2],
-        (joint.J4 + joint.J3) * JointInv[3], // 平行リンク補正
-        (-joint.J5 - kick) * JointInv[4]
-    );
+    out[0] = static_cast<long>(servoICS::fromRad_toIcs(joint.J1 * JointInv[0]));
+    out[1] = static_cast<long>(servoICS::fromRad_toIcs(joint.J2 * JointInv[1]));
+    out[2] = static_cast<long>(servoICS::fromRad_toIcs(-joint.J3 * JointInv[2]));
+    out[3] = static_cast<long>(servoICS::fromRad_toIcs((joint.J4 + joint.J3) * JointInv[3])); // 平行リンク補正
+    out[4] = static_cast<long>(servoICS::fromRad_toIcs((-joint.J5 - kick) * JointInv[4]));
 #endif
+    return true;
+}
+
+void FootController::setTargetPose(const Pose& targetPose, float kick, int mode) {
+    long pos[5];
+    // 到達不可の場合は送信せず、直前の指令を保持する（NaN指令の防止）。
+    if (!computeJointPos(targetPose, kick, mode, pos)) return;
+    setJointAngles(pos[0], pos[1], pos[2], pos[3], pos[4]);
 }
 
 void FootController::setJointStretch(unsigned char stretch) {
@@ -196,7 +209,10 @@ void FootController::DemoPos() {
 }
 
 float FootController::calcAngle(float LengA, float LengB, float LengC) {
-    return acos((-LengA * LengA + LengB * LengB + LengC * LengC) / (2 * LengB * LengC));
+    float v = (-LengA * LengA + LengB * LengB + LengC * LengC) / (2 * LengB * LengC);
+    if (v > 1.0f) v = 1.0f;
+    if (v < -1.0f) v = -1.0f;
+    return acos(v);
 }
 
 float FootController::length(float x, float y, float z) {

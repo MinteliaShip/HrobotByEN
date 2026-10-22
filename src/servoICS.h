@@ -7,10 +7,8 @@
 #include <type_traits>
 #include <vector> // インスタンスリスト用
 
-// --- 教示（TX）モード用グローバル変数の extern 宣言 ---
-extern volatile bool g_teachCmdPending;
-extern uint8_t g_teachRxBuffer[64];
-extern size_t g_teachRxLength;
+// （旧: 教示モード用グローバル変数のexternがここにあったが、ライブラリとは無関係なので削除。
+//   g_teachCmdPending は main.cpp / Motion.cpp 側で宣言している）
 
 namespace servoICS {
 
@@ -89,7 +87,8 @@ namespace servoICS {
     }
 
     inline long fromDeg_toIcs(float degPos){
-        return (long)servoICS_map((float)degPos, (float)DEG_LOW, (float)DEG_HIGH, (float)ICS_LOW, (float)ICS_HIGH);
+        // 旧実装は(long)キャストで0方向へ切り捨てていたため、正負で最大1カウントの偏りがあった。四捨五入にする。
+        return lroundf(servoICS_map((float)degPos, (float)DEG_LOW, (float)DEG_HIGH, (float)ICS_LOW, (float)ICS_HIGH));
     }
 
     inline float fromDeg_toRad(float degPos){
@@ -100,7 +99,7 @@ namespace servoICS {
         return radPos * (180.0f / myPI);
     }
 
-    inline float fromRad_toIcs(float radPos){
+    inline long fromRad_toIcs(float radPos){   // 旧: 戻り値がfloatだった
         return fromDeg_toIcs(fromRad_toDeg(radPos));
     }
 
@@ -174,8 +173,9 @@ namespace servoICS {
 
             //スキップ機能有効化フラグ(0:off 1:on)
             bool isSkip_ = 0;
-            //前の角度を保持。スキップ判定に使用。
-            long prePos_ = 0;
+            //前回「実際に送信した」生の値。スキップ判定に使用（-1=未送信）。
+            long prePos_ = -1;
+            bool hasSetPos_ = false;
 
             //送信角度の保持用変数
             long lastSetPos_ = 7500; // 最後に送信されたICS値（初期値: 7500）
@@ -184,7 +184,8 @@ namespace servoICS {
             long offSet_ = 7500;    //ソフトウェアオフセット値(ICS値)
             long minIcs_ = ICS_LOW; //ソフトウェアリミット最小
             long maxIcs_ = ICS_HIGH;//ソフトウェアリミット最大
-            unsigned long waitTimeUs_ = 1000; //通信を空ける時間(us)
+            unsigned long waitTimeUs_ = 1000; //送信前に通信を空ける時間(us)
+            unsigned long postWaitUs_ = 500;  //setPos送信後の待ち時間(us)（サーボの返信と衝突しないため）
 
             //インスタンス一括管理用
             static std::vector<Servo*> instances_;
@@ -240,9 +241,18 @@ namespace servoICS {
             SubGetPos& setPosFree(){ return setPos(0); }
 
             // 保持した送信角度の取得機能
+            // ※「生のICS値」（オフセット加算後、サーボへ実際に送った値）。FREE送信後は0。
             long getLastSetPosIcs() const { return lastSetPos_; }
             float getLastSetPosDeg() const { return fromIcs_toDeg(lastSetPos_); }
             float getLastSetPosRad() const { return fromIcs_toRad(lastSetPos_); }
+            // 一度でも位置指令(FREE以外)を送ったか
+            bool hasSetPos() const { return hasSetPos_; }
+
+            // ---- 論理値 ⇔ 生値 の変換（論理値 = setPos(x, true)に渡す値。7500 = 校正済みの中立）----
+            long toRawIcs(long logicalIcs) const { return logicalIcs == 0 ? 0 : logicalIcs + (offSet_ - 7500); }
+            long toLogicalIcs(long rawIcs) const { return rawIcs == 0 ? 0 : rawIcs - (offSet_ - 7500); }
+            long getLastSetPosLogicalIcs() const { return toLogicalIcs(lastSetPos_); }
+            float getLastSetPosLogicalDeg() const { return fromIcs_toDeg(getLastSetPosLogicalIcs()); }
 
             //スピードとストレッチのset
             Result<void> setSpeed(unsigned char speed);
@@ -253,6 +263,10 @@ namespace servoICS {
             Result<long> getPosIcs(){return getPos();}
             Result<float> getPosDeg(){return fromIcs_toDeg_Result(getPos());}
             Result<float> getPosRad(){return fromIcs_toRad_Result(getPos());}
+            // getPos()は生値（オフセット込みの実位置）。オフセットを差し引いた論理値で読む版。
+            Result<long> getPosLogicalIcs(){ Result<long> r = getPos(); if(r.success) r.value = toLogicalIcs(r.value); return r; }
+            Result<float> getPosLogicalDeg(){ return fromIcs_toDeg_Result(getPosLogicalIcs()); }
+            Result<float> getPosLogicalRad(){ return fromIcs_toRad_Result(getPosLogicalIcs()); }
 
             //スピードとストレッチのget
             Result<int> getSpeed();
@@ -290,6 +304,10 @@ namespace servoICS {
             Result<long> getMSMaxIcs(){return getMSMax();}
             Result<float> getMSMaxDeg(){return fromIcs_toDeg_Result(getMSMax());}
             Result<float> getMSMaxRad(){return fromIcs_toRad_Result(getMSMax());}
+
+            //通信間隔の設定（既定: 送信前1000us / setPos後500us）。短くするほど19軸の更新が速くなるが、
+            //サーボの返信(3byte)とバス上で衝突しない値にすること。
+            void setWaitTimeUs(unsigned long preUs, unsigned long postUs){ waitTimeUs_ = preUs; postWaitUs_ = postUs; }
 
             //スキップ機能
             void setSkip(bool isSkip);

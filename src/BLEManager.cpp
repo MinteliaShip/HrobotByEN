@@ -1,4 +1,5 @@
 #include "BLEManager.h"
+#include "Declaration.h"
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -11,6 +12,8 @@
 // Motion.cppで実装：BLE callbackから受け取った指令をバッファへ渡す。
 // 外部リンケージを維持するため、匿名namespaceの外で宣言する。
 extern bool queueTeachingCommand(const uint8_t* data, size_t length);
+extern bool queueTeachingPose(const uint8_t* data, size_t length);
+extern bool queueTeachingNeutral(uint8_t foot);
 extern void startTeachingMode();
 extern void stopTeachingMode();
 extern bool handleUploadedMotionCommand(const uint8_t* data, size_t length);
@@ -24,6 +27,7 @@ constexpr char CHARACTERISTIC_UUID_TX[] = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 BLEServer* pServer = nullptr;
 BLECharacteristic* pTxCharacteristic = nullptr;
 bool oldDeviceConnected = false;
+volatile bool offsetRequested = false; // 0x42受信 → updateBLE()でオフセット表を送る
 
 // GATT callbackからnotify()を直接呼ばない。ACKをFIFOへ積み、
 // loop()側のupdateBLE()から通常テレメトリと同じ実行コンテキストで送る。
@@ -78,6 +82,16 @@ public:
     }
 };
 
+// 拒否ログは連打されるので1秒に1回まで。
+static void logRejected(const char* msg) {
+    static uint32_t lastMs = 0;
+    const uint32_t now = millis();
+    if (now - lastMs >= 1000) {
+        lastMs = now;
+        Serial.printf("[BLE RX] %s\n", msg);
+    }
+}
+
 // BLE callback内ではサーボUARTを操作しない。受信フレームをMotion側へ渡すだけ。
 class RxCallbacks final : public BLECharacteristicCallbacks {
 public:
@@ -125,12 +139,34 @@ public:
         }
 
         // 現行プロトコル45B: [0x01][CommandMask:3B][FeedbackMask:3B][Angles:19*2B]
+        // 高頻度に届くため、受理時のログは出さない（BLEタスクの遅延を避ける）。
         if (rxValue.length() == 45 && static_cast<uint8_t>(rxValue[0]) == 0x01) {
-            if (queueTeachingCommand(
+            if (!queueTeachingCommand(
                     reinterpret_cast<const uint8_t*>(rxValue.data()), rxValue.length())) {
-                Serial.println("[BLE RX] Teaching frame queued (45 bytes).");
-            } else {
-                Serial.println("[BLE RX] Teaching frame rejected: previous frame is busy.");
+                logRejected("Teaching frame rejected: not in TX mode.");
+            }
+            return;
+        }
+
+        // 座標(IK)指令: [0x40][foot][mode][X,Y,Z,Roll,Pitch,Yaw: float32 LE x6] = 27B
+        if (rxValue.length() == 27 && static_cast<uint8_t>(rxValue[0]) == 0x40) {
+            if (!queueTeachingPose(
+                    reinterpret_cast<const uint8_t*>(rxValue.data()), rxValue.length())) {
+                logRejected("Pose command rejected: not in TX mode or invalid value.");
+            }
+            return;
+        }
+
+        // オフセット表要求: [0x42] → [0x39][19*int16 LE]（各サーボの setOffset 値）
+        if (rxValue.length() == 1 && static_cast<uint8_t>(rxValue[0]) == 0x42) {
+            offsetRequested = true;
+            return;
+        }
+
+        // ニュートラル座標要求: [0x41][foot]
+        if (rxValue.length() == 2 && static_cast<uint8_t>(rxValue[0]) == 0x41) {
+            if (!queueTeachingNeutral(static_cast<uint8_t>(rxValue[1]))) {
+                logRejected("Neutral request rejected: not in TX mode.");
             }
             return;
         }
@@ -152,10 +188,8 @@ public:
             frame[angleOffset] = static_cast<uint8_t>(ics & 0xFF);
             frame[angleOffset + 1] = static_cast<uint8_t>((ics >> 8) & 0xFF);
 
-            if (queueTeachingCommand(frame, sizeof(frame))) {
-                Serial.printf("[BLE RX] Legacy servo %u command queued.\n", id);
-            } else {
-                Serial.println("[BLE RX] Legacy command rejected: previous frame is busy.");
+            if (!queueTeachingCommand(frame, sizeof(frame))) {
+                logRejected("Legacy command rejected: not in TX mode.");
             }
             return;
         }
@@ -218,6 +252,18 @@ void updateBLE() {
     }
     portEXIT_CRITICAL(&ackMux);
     if (hasAck) sendBLE(ack, sizeof(ack));
+
+    if (offsetRequested && deviceConnected) {
+        offsetRequested = false;
+        uint8_t pkt[39];
+        pkt[0] = 0x39;
+        for (int i = 0; i < 19; ++i) {
+            const long ofs = (ServoArray[i] != nullptr) ? ServoArray[i]->getOffset().value : 7500;
+            pkt[1 + i * 2] = static_cast<uint8_t>(ofs & 0xFF);
+            pkt[2 + i * 2] = static_cast<uint8_t>((ofs >> 8) & 0xFF);
+        }
+        sendBLE(pkt, sizeof(pkt));
+    }
 
     // BLE切断後に再広告し、再接続できるようにする。
     if (!deviceConnected && oldDeviceConnected) {

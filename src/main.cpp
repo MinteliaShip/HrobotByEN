@@ -164,7 +164,7 @@ void taskManager() {
         }
         g_usingPartsBit = 0;
         wasTeachingMode = false;
-        if (g_teachModeActive && deviceConnected && g_teachCmdPending) {
+        if (g_teachModeActive && deviceConnected) {
             motion::TeachingMode_inst.motionLoop();
         } else if (!g_teachModeActive && deviceConnected) {
             // 緊急停止ラッチ中でもRX表示用テレメトリは継続する。
@@ -174,7 +174,7 @@ void taskManager() {
         return;
     }
 
-    // 教示中は他のモーションを停止・抑止し、要求をメインループ内でブロッキング処理する。
+    // 教示中は他のモーションを停止・抑止し、毎周期ノンブロッキングで教示処理を進める。
     if (g_teachModeActive && deviceConnected) {
         if (!wasTeachingMode) {
             for (int i = 0; i < motionList::motionArrNum; ++i) {
@@ -184,9 +184,8 @@ void taskManager() {
             wasTeachingMode = true;
         }
 
-        if (g_teachCmdPending) {
-            motion::TeachingMode_inst.motionLoop();
-        }
+        // 指令の有無に関わらず毎周期呼ぶ（スムージング出力・FB・応答送信を継続するため）。
+        motion::TeachingMode_inst.motionLoop();
         return; // この間は通常モーションと定期テレメトリを動かさない。
     }
 
@@ -208,9 +207,9 @@ FrameLimiter framelim;
 void setup() {
     Serial.begin(serialPC_bps);
     Serial1.begin(serialServo_bps, SERIAL_8E1, rxPin, txPin);
-    // 返り値がないサーボ1軸あたりの待ち時間を有限にする。
-    // 実FB対象が複数あっても全ループが無制限に停止しないようにする。
-    Serial1.setTimeout(100);
+    // 返り値がないサーボ1軸あたりの待ち時間。ICSの返信は1ms程度で来るので10msで十分。
+    // （旧100msだと、応答しない軸のFBを読むたびに制御周期が100ms止まっていた）
+    Serial1.setTimeout(10);
 
     if (!setupIMU()) {
         Serial.println("IMU Initialization Failed!");

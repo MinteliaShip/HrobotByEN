@@ -9,7 +9,7 @@ const int rxPin = 22;
 const int enPin = 23;
 /**********************************************/
 
-const char stretch = 110;
+const char stretch = 120;
 int G_fps = 40;
 
 float NeutralPoseY = 250;
@@ -79,14 +79,16 @@ GaitParameters Config::MV_X_PARAM_1Y{
     0.15f        // kickTime
 };
 
-GaitParameters Config::MV_X_PARAM_FAST_Y{
-    0.2,         // T
-    80,          // h
-    -300,         // Wd
+//double
+
+GaitParameters Config::MV_Y_DOUBLE{
+    0.3,         // T
+    100,          // h
+    -400,         // Wd
     0.90,        // DutyX
     0.85,        // DutyY
     G_fps,       // Fps
-    NeutralSpac, // Spac
+    NeutralSpac-40, // Spac
     NeutralPoseY + footPoseDefLeft, // offsetZ_left
     NeutralPoseX,        // offsetX_left
     NeutralPoseY + footPoseDefRight, // offsetZ_right
@@ -96,6 +98,25 @@ GaitParameters Config::MV_X_PARAM_FAST_Y{
     0.0f,      // kickX_right
     -10.0f,      // kickY_right
     0.2f         // kickTime
+};
+
+GaitParameters Config::MV_Y_SINGLE{//そこまで早くない
+    0.3,         // T
+    80,          // h
+    -400,         // Wd
+    0.90,        // DutyX
+    0.85,        // DutyY
+    G_fps,       // Fps
+    NeutralSpac-40, // Spac
+    NeutralPoseY + footPoseDefLeft, // offsetZ_left
+    NeutralPoseX,        // offsetX_left
+    NeutralPoseY + footPoseDefRight, // offsetZ_right
+    NeutralPoseX,        // offsetX_right
+    0.0f,      // kickX_left
+    -10.0f,      // kickY_left
+    0.0f,      // kickX_right
+    -10.0f,      // kickY_right
+    0.1f         // kickTime
 };
 
 GaitParameters Config::MV_X_PARAM_TURN{

@@ -69,48 +69,52 @@ namespace servoICS {
     }
 
     Servo::SubGetPos& Servo::setPos(long ics, bool offsetEn){
-        static char error_str[1024] = ""; 
-
-        if((ics == prePos_) && isSkip_){
-            status.success = 1;
-            status.error_msg = "[I]スキップを実行しました。";
-            return sub;
-        }
-        prePos_ = ics;
+        static char error_str[160] = "";
 
         status.success = 1;
 
         if(ics != 0){
-            //オフセット無効時には弾く
+            //オフセット有効時は論理値→生値へ変換
             if(offsetEn) ics = ics + (offSet_ - 7500);
 
-            //異常指令値をはじく
+            //異常指令値をはじく（送信しない＝直前の姿勢を保持）
             if(ics > maxIcs_){
                 status.success = 0;
-                sprintf(error_str,"[E]setPos:上限maxIcs_より指令値icsの方が大きいです。ICS=%d Deg=%d \0",ics,(int)fromIcs_toDeg(ics));
+                snprintf(error_str, sizeof(error_str), "[E]setPos:上限maxIcs_より指令値icsの方が大きいです。ICS=%ld Deg=%d", ics, (int)fromIcs_toDeg(ics));
                 status.error_msg = error_str;
                 return sub;
-            }else if((ics < minIcs_)&&(ics != 0)){
+            }else if(ics < minIcs_){
                 status.success = 0;
-                sprintf(error_str,"[E]setPos:下限minIcs_より指令値icsの方が小さいです。ICS=%d Deg=%d \0",ics,(int)fromIcs_toDeg(ics));
+                snprintf(error_str, sizeof(error_str), "[E]setPos:下限minIcs_より指令値icsの方が小さいです。ICS=%ld Deg=%d", ics, (int)fromIcs_toDeg(ics));
                 status.error_msg = error_str;
                 return sub;
             }
         }
 
+        //スキップ判定は「オフセット適用後の実際に送る値」で行う。
+        //旧実装はオフセット適用前の値で比較し、さらに送信失敗/リミット拒否でもprePos_を更新していたため、
+        //同じ値を再送しても送られないことがあった。
+        if(isSkip_ && (ics == prePos_)){
+            status.success = 1;
+            status.error_msg = "[I]スキップを実行しました。";
+            return sub;
+        }
+
         unsigned char txByte[3];
         txByte[0] = 0b10000000 | (0b00011111 & servoId_);
-        txByte[1] = char((ics & 0b00011111110000000) >> 7);
-        txByte[2] = char(ics & 0b00000000001111111);
+        txByte[1] = (unsigned char)((ics >> 7) & 0x7F);
+        txByte[2] = (unsigned char)(ics & 0x7F);
 
         status = transfer_(txByte, 3, 0, 0);
 
         // 送信処理に成功した場合、保持値を更新
         if (status.success) {
             lastSetPos_ = ics;
+            prePos_ = ics;
+            if (ics != 0) hasSetPos_ = true;
         }
 
-        delayMicroseconds(500);
+        if (postWaitUs_ > 0) delayMicroseconds(postWaitUs_);
 
         return sub;
     }
@@ -159,9 +163,9 @@ namespace servoICS {
             return result;
         }
 
-        unsigned char rxByte[3];
+        unsigned char rxByte[3] = {0, 0, 0};
         result = p->transfer_(0, 0, rxByte, 3);
-        result.value = (unsigned long int)(rxByte[1] << 7) | rxByte[2];
+        result.value = result.success ? (long)(((rxByte[1] & 0x7F) << 7) | (rxByte[2] & 0x7F)) : 0;
         return result;
     }
 
@@ -172,9 +176,10 @@ namespace servoICS {
         txByte[0] = 0b10100000 | (0b00011111 & servoId_);
         txByte[1] = 0x05;
 
-        unsigned char rxByte[4];
+        unsigned char rxByte[4] = {0, 0, 0, 0};
         result = transfer_(txByte, 2, rxByte, 4);
-        result.value = (unsigned long int)(rxByte[2] << 7) | rxByte[3];
+        // 失敗時は未初期化バッファのゴミ値を返さない
+        result.value = result.success ? (long)(((rxByte[2] & 0x7F) << 7) | (rxByte[3] & 0x7F)) : 0;
         return result;
     }
 
@@ -209,7 +214,8 @@ namespace servoICS {
         Result<void> result;
         result.success = 1;
 
-        if((offsetIcs<minIcs_)&&(maxIcs_<offsetIcs)){
+        // 旧: (offsetIcs<minIcs_)&&(maxIcs_<offsetIcs) は常にfalseでチェックが効いていなかった
+        if((offsetIcs<minIcs_)||(maxIcs_<offsetIcs)){
             result.error_msg = "[E] setOffset:オフセット設定値が設置した角度内にありません";
             result.success = 0;
             return result;

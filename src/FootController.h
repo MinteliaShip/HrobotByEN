@@ -56,7 +56,7 @@ private:
     servoICS::Servo* servoJ4;
     servoICS::Servo* servoJ5;
 
-    footJoint5 IK(const Pose& targetPose, int mode);
+    bool IK(const Pose& targetPose, int mode, footJoint5& joint);  // false: 到達不可
 
     int JointInv[5] = {1, 1, 1, 1, 1};
 
@@ -79,6 +79,9 @@ public:
 
     void DemoPos();
     void setTargetPose(const Pose& targetPos, float kick = 0, int mode = 0);
+    // setTargetPoseと同じ変換を行うが、サーボへは送信しない。
+    // out[5]にはsetPos()へ渡す値(J1..J5)が入る。到達不可/NaNならfalse。
+    bool computeJointPos(const Pose& targetPose, float kick, int mode, long out[5]);
 
 private:
     // 計算補助関数

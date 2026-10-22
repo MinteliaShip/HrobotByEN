@@ -1,26 +1,64 @@
 #include "Motion.h"
+#include <cmath>
 
 extern volatile bool deviceConnected;
 extern void sendBLE(uint8_t* data, size_t length);
 
-// 教示モード（TX）制御用の固定長メールボックス。
-// onWrite callbackはフレームを置くだけで、サーボUARTアクセスはメインループで実行する。
-volatile bool g_teachCmdPending = false;
+// ==============================================================
+// 教示モード（TX / 同期モード）
+//  - BLE callbackは「最新値優先のメールボックス」へ置くだけ（サーボUARTには触れない）。
+//  - 実処理は TeachingMode::motionLoop() が main loop から毎周期呼ばれて行う。
+//  - 軸指令(0x01)は未処理分をマージ（軸ごとに最新値）。座標指令(0x40)は脚ごとに最新値。
+// ==============================================================
+volatile bool g_teachCmdPending = false;   // 未処理の軸/座標指令がある（main.cpp互換）
 volatile bool g_teachModeActive = false;
-static volatile bool g_teachCmdProcessing = false;
-uint8_t g_teachRxBuffer[64] = {0};
-size_t g_teachRxLength = 0;
 static portMUX_TYPE g_teachCmdMux = portMUX_INITIALIZER_UNLOCKED;
+
+namespace {
+constexpr uint32_t TEACH_ALL_MASK = (1UL << 19) - 1UL;
+
+struct TeachAxisCmd {
+    uint32_t cmdMask;
+    uint32_t fbMask;
+    uint16_t ics[19];
+};
+struct TeachPoseCmd {
+    float v[6];     // X, Y, Z, Roll[rad], Pitch[rad], Yaw[rad]
+    uint8_t mode;   // IK解の選択(0/1)
+};
+
+TeachAxisCmd g_axisPending = {};
+bool g_axisPendingValid = false;
+TeachPoseCmd g_posePending[2] = {};
+bool g_posePendingValid[2] = {false, false};
+bool g_poseNeutralReq[2] = {false, false};
+bool g_teachNeedReset = true;
+}
 
 bool queueTeachingCommand(const uint8_t* data, size_t length) {
     if (data == nullptr || length != 45 || data[0] != 0x01) return false;
+    const uint32_t cmd = (static_cast<uint32_t>(data[1]) | (static_cast<uint32_t>(data[2]) << 8) |
+                          (static_cast<uint32_t>(data[3]) << 16)) & TEACH_ALL_MASK;
+    const uint32_t fb = (static_cast<uint32_t>(data[4]) | (static_cast<uint32_t>(data[5]) << 8) |
+                         (static_cast<uint32_t>(data[6]) << 16)) & TEACH_ALL_MASK;
 
     bool accepted = false;
     portENTER_CRITICAL(&g_teachCmdMux);
-    if (!g_teachCmdPending && !g_teachCmdProcessing) {
-        memcpy(g_teachRxBuffer, data, length);
-        g_teachRxLength = length;
-        g_teachModeActive = true;
+    // TX(同期)モードでない時は受け付けない。RXへ戻した後に遅れて届いたフレームで
+    // 勝手にTXへ戻ってしまう不具合の修正。
+    if (g_teachModeActive) {
+        if (!g_axisPendingValid) {
+            g_axisPending.cmdMask = 0;
+            g_axisPendingValid = true;
+        }
+        for (int i = 0; i < 19; ++i) {
+            if (cmd & (1UL << i)) {
+                g_axisPending.ics[i] = static_cast<uint16_t>(data[7 + i * 2]) |
+                                       (static_cast<uint16_t>(data[8 + i * 2]) << 8);
+            }
+        }
+        g_axisPending.cmdMask |= cmd;   // 未処理の軸指令は失わずマージする
+        g_axisPending.fbMask = fb;      // フィードバック要求は最新値
         g_teachCmdPending = true;
         accepted = true;
     }
@@ -28,29 +66,84 @@ bool queueTeachingCommand(const uint8_t* data, size_t length) {
     return accepted;
 }
 
+// 座標指令: [0x40][foot:0=左,1=右][mode][X,Y,Z,Roll,Pitch,Yaw : float32 LE x6] = 27B
+bool queueTeachingPose(const uint8_t* data, size_t length) {
+    if (data == nullptr || length != 27 || data[0] != 0x40) return false;
+    const uint8_t foot = data[1];
+    if (foot > 1) return false;
+    TeachPoseCmd cmd;
+    cmd.mode = data[2] ? 1 : 0;
+    memcpy(cmd.v, data + 3, sizeof(cmd.v));
+    for (int i = 0; i < 6; ++i) {
+        if (!std::isfinite(cmd.v[i])) return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (fabsf(cmd.v[i]) > 400.0f) return false;      // [mm]
+    }
+    if (fabsf(cmd.v[3]) > 1.6f || fabsf(cmd.v[5]) > 1.6f) return false; // [rad]
+    cmd.v[4] = 0.0f; // Pitchは現行IKでは未使用
+
+    bool accepted = false;
+    portENTER_CRITICAL(&g_teachCmdMux);
+    if (g_teachModeActive) {
+        g_posePending[foot] = cmd;
+        g_posePendingValid[foot] = true;
+        g_teachCmdPending = true;
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&g_teachCmdMux);
+    return accepted;
+}
+
+// ニュートラル座標要求: [0x41][foot]。適用後に [0x37][foot][6 floats] で適用座標を返す。
+bool queueTeachingNeutral(uint8_t foot) {
+    if (foot > 1) return false;
+    bool accepted = false;
+    portENTER_CRITICAL(&g_teachCmdMux);
+    if (g_teachModeActive) {
+        g_poseNeutralReq[foot] = true;
+        g_teachCmdPending = true;
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&g_teachCmdMux);
+    return accepted;
+}
+
+void teachingRequestReset() {
+    portENTER_CRITICAL(&g_teachCmdMux);
+    g_teachNeedReset = true;
+    portEXIT_CRITICAL(&g_teachCmdMux);
+}
+
 void startTeachingMode() {
     portENTER_CRITICAL(&g_teachCmdMux);
     g_teachModeActive = true;
+    g_axisPendingValid = false;
+    g_posePendingValid[0] = g_posePendingValid[1] = false;
+    g_poseNeutralReq[0] = g_poseNeutralReq[1] = false;
+    g_teachCmdPending = false;
+    g_teachNeedReset = true;
     portEXIT_CRITICAL(&g_teachCmdMux);
 }
 
 void stopTeachingMode() {
     portENTER_CRITICAL(&g_teachCmdMux);
     g_teachModeActive = false;
-    if (!g_teachCmdProcessing) {
-        g_teachCmdPending = false;
-        g_teachRxLength = 0;
-    }
+    g_axisPendingValid = false;
+    g_posePendingValid[0] = g_posePendingValid[1] = false;
+    g_poseNeutralReq[0] = g_poseNeutralReq[1] = false;
+    g_teachCmdPending = false;
+    g_teachNeedReset = true;
     portEXIT_CRITICAL(&g_teachCmdMux);
 }
 
 // サーボID(0〜18)に対応する部位ビットのルックアップテーブル
 static const BusyPartsBit SERVO_PART_MAP[19] = {
-    RIGHT_ARM_BIT, RIGHT_ARM_BIT, RIGHT_ARM_BIT, // サーボ 0..2
-    LEFT_ARM_BIT,  LEFT_ARM_BIT,  LEFT_ARM_BIT,  // サーボ 3..5
-    RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, // サーボ 6..11
-    LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  LEFT_FOOT_BIT,  // サーボ 12..17
-    HIP_BIT                                      // サーボ 18
+    HIP_BIT,                                                     // サーボ 0   : 腰
+    LEFT_ARM_BIT,  LEFT_ARM_BIT,  LEFT_ARM_BIT,  LEFT_ARM_BIT,   // サーボ 1..4 : 左腕
+    RIGHT_ARM_BIT, RIGHT_ARM_BIT, RIGHT_ARM_BIT, RIGHT_ARM_BIT,  // サーボ 5..8 : 右腕
+    LEFT_FOOT_BIT, LEFT_FOOT_BIT, LEFT_FOOT_BIT, LEFT_FOOT_BIT, LEFT_FOOT_BIT,     // サーボ 9..13  : 左足
+    RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT, RIGHT_FOOT_BIT // サーボ 14..18 : 右足
 };
 
 /// PROGMEM上のモーション配列を逐次再生する共通関数
@@ -307,7 +400,10 @@ bool handleUploadedMotionCommand(const uint8_t* data, size_t length) {
             accepted = true;
         }
         portEXIT_CRITICAL(&g_uploadedMotionMux);
-        if (accepted) Serial.printf("[MOTION] Loaded %u frames from LittleFS and started playback.\n", expectedFrames);
+        if (accepted) {
+            teachingRequestReset(); // 再生でサーボ位置が変わるため、教示側の目標値を破棄
+            Serial.printf("[MOTION] Loaded %u frames from LittleFS and started playback.\n", expectedFrames);
+        }
         return accepted;
     }
 
@@ -734,7 +830,7 @@ bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &tas
 
 
 // ==========================================
-// 2. canStart() の実装　モーション起動の条件
+// 2. canStart() の実装 モーション起動の条件
 // ==========================================
 namespace motion {
     // --- 歩行系 ---
@@ -762,7 +858,7 @@ namespace motion {
     bool attack_Medium_left::canStart() { return false; }//return Dualshock4.data.button.l2
     bool attack_Light_right::canStart() { return Dualshock4.data.button.r1; }
     bool attack_Medium_right::canStart() { return Dualshock4.data.button.r2; }
-    bool attack_Heavy_1::canStart() { return Dualshock4.data.button.l2; } // 旧実装なし（仮）
+    bool attack_Heavy_1::canStart() { return Dualshock4.data.button.l2; }
     bool attack_Heavy_2::canStart() { return false; } // 旧実装なし（仮）
 
     // --- ポーズ・特殊系 ---
@@ -821,7 +917,7 @@ namespace motion {
 
     bool TeachingMode::canStart() {
         // TeachingModeはtaskManagerから優先実行される。通常の排他制御経路向けの判定。
-        return deviceConnected && g_teachModeActive && g_teachCmdPending;
+        return false; // TeachingModeはtaskManagerから毎周期直接駆動する
     }
 
 /**************************************************** */
@@ -1089,269 +1185,510 @@ namespace motion {
     }
 
     bool walkY::motionLoop(){
-        //MV_X_PARAM_FAST_Y
-        //MV_X_PARAM_1Y
-        GaitParameters &param_p = Config::MV_X_PARAM_FAST_Y;
+        const bool mode = 0;//single:1 doble:0
+        if(mode){
 
-        // 毎フレーム定義・計算する変数（ローカル変数）
-        float T = param_p.T;
-        float h = param_p.h;
-        float DutyX = param_p.DutyX;
-        float DutyY = param_p.DutyY;
-        int Fps = param_p.Fps;
-        float Spac = param_p.Spac;
-        float Wd = param_p.Wd;
+            GaitParameters &param_p = Config::MV_Y_SINGLE;
+            // 毎フレーム定義・計算する変数（ローカル変数）
+            float T = param_p.T;
+            float h = param_p.h;
+            float DutyX = param_p.DutyX;
+            float DutyY = param_p.DutyY;
+            int Fps = param_p.Fps;
+            float Spac = param_p.Spac;
+            float Wd = param_p.Wd;
 
-        float offsetZ_left = param_p.offsetZ_left;
-        float offsetX_left = param_p.offsetX_left;
-        float offsetZ_right = param_p.offsetZ_right;
-        float offsetX_right = param_p.offsetX_right;
+            float offsetZ_left = param_p.offsetZ_left;
+            float offsetX_left = param_p.offsetX_left;
+            float offsetZ_right = param_p.offsetZ_right;
+            float offsetX_right = param_p.offsetX_right;
 
-        float kickX_left_val = param_p.kickX_left;
-        float kickY_left_val = param_p.kickY_left;
-        float kickX_right_val = param_p.kickX_right;
-        float kickY_right_val = param_p.kickY_right;
-        float push_window = param_p.kickTime;
+            float kickX_left_val = param_p.kickX_left;
+            float kickY_left_val = param_p.kickY_left;
+            float kickX_right_val = param_p.kickX_right;
+            float kickY_right_val = param_p.kickY_right;
+            float push_window = param_p.kickTime;
 
-        int totalFrames = (int)(T * Fps);
+            int totalFrames = (int)(T * Fps);
 
 
 
-        // 状態を維持する必要がある変数のみ static にする
-        static int taskPhase = 0;
-        static int frame = 0;
+            // 状態を維持する必要がある変数のみ static にする
+            static int taskPhase = 0;
+            static int frame = 0;
 
-        //左右に移動
-        static float moveValue;
+            //左右に移動
+            static float moveValue;
 
-        switch (taskPhase){
-            case 0:
-            {
-                for(int i=0;i<19;i++){
-                    ServoArray[i]->setStretch(stretch);
-                    delay(5);
+            switch (taskPhase){
+                case 0:
+                {
+                    taskPhase = 2;//スキップ
+                    moveValue = 0;
+                    break;
                 }
-                taskPhase = 1;
-                moveValue = 0;
-                break;
-            }
-            case 1:
-            {
-                //歩行準備
-                //if(!startWalking(param_p))taskPhase = 2;
-                taskPhase = 2;
-                break;
-            }
-            case 2:
-            {
-                // 経過時間 ts の計算 (秒)
-                float ts_left = (float)frame / Fps;
-                // 右足は位相を半周期 (T / 2.0) ずらす
-                float ts_right = fmod(ts_left + (T / 2.0f), T);
-                
-                moveValue = moveValue + (-(float)Dualshock4.data.button.left + (float)Dualshock4.data.button.right)*0.05;
-                if(moveValue > 1){
-                    moveValue = 1;
-                }else if(moveValue < -1){
-                    moveValue = -1;
+                case 1:
+                {
+                    //歩行準備
+                    //if(!startWalking(param_p))taskPhase = 2;
+                    taskPhase = 2;
+                    break;
                 }
+                case 2:
+                {
+                    // 経過時間 ts の計算 (秒)
+                    float ts_left = (float)frame / Fps;
+                    // 右足は位相を半周期 (T / 2.0) ずらす
+                    float ts_right = fmod(ts_left + (T / 2.0f), T);
+                    
+                    moveValue = moveValue + (-(float)Dualshock4.data.button.left + (float)Dualshock4.data.button.right)*0.05;
+                    if(moveValue > 1){
+                        moveValue = 1;
+                    }else if(moveValue < -1){
+                        moveValue = -1;
+                    }
 
-                Serial.printf("Dualshock4.data.button.left:%d Dualshock4.data.button.right:%d moveValue:%f\n",Dualshock4.data.button.left,Dualshock4.data.button.right,moveValue);
+                    Serial.printf("Dualshock4.data.button.left:%d Dualshock4.data.button.right:%d moveValue:%f\n",Dualshock4.data.button.left,Dualshock4.data.button.right,moveValue);
 
-                // 軌道生成処理 (FootController.cpp の tread 関数を利用)
-                Vector2 leftPosXY = {0,0};
-                Vector2 rightPosXY = {0,0};
-
-                if(moveValue==1){
                     // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+                    Vector2 leftPosXY = {0,0};
+                    Vector2 rightPosXY = {0,0};
+
+                    if(moveValue==1){
+                        // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+                        leftPosXY = leftFoot.tread(h,Wd*moveValue,DutyX,DutyY,T,ts_left);
+                    }else{
+                        rightPosXY = rightFoot.tread(h,Wd*moveValue,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+                    }
+
+                    float kick_x_left = 0.0f;
+                    float kick_y_left = 0.0f;
+                    float angle_left=0;
+
+                    float kick_x_right = 0.0f;
+                    float kick_y_right = 0.0f;
+                    float angle_right=0;
+
+                    // 接地期の終盤で後ろ・下へ押し込む
+                    float support_end = DutyX * T / 2.0f;
+                    
+                    float angle_def = -((30)*PI/360) * moveValue;
+
+                    if (ts_left > (support_end - push_window) && ts_left < support_end) {
+                        kick_x_left = kickX_left_val - 0;
+                        kick_y_left = kickY_left_val + 0;
+                    }
+
+                    if (ts_right > (support_end - push_window) && ts_right < support_end) {
+                        kick_x_right = kickX_right_val - 0;
+                        kick_y_right = kickY_right_val + 0;
+                    }
+
+                    FootController::Pose leftPose={
+                    offsetZ_left-leftPosXY.y,-Spac-leftPosXY.x,0 + offsetX_left,
+                    0, 0, 0
+                    };
+
+                    FootController::Pose rightPose={
+                    offsetZ_right-rightPosXY.y,+Spac-rightPosXY.x ,0 + offsetX_right,
+                    0, 0, 0
+                    };
+
+                    // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                    leftFoot.setTargetPose(leftPose,angle_def,30);
+                    rightFoot.setTargetPose(rightPose,angle_def,-30);
+
+                    if(frame < totalFrames){
+                        frame++;
+                    }else{
+                        frame = 0;
+                    }
+
+                    //行進のコントローラがない場合、または、回転のボタンが押された場合は抜ける。 
+                    if((!Dualshock4.data.button.left && !Dualshock4.data.button.right) && (frame>=totalFrames)){//最終フレームで抜けるように
+                        taskPhase = 3;
+                        frame = 0;
+                    }
+                    break;
+                }        
+                case 3:
+                {
+                    taskPhase = 0;
+                    FootController::Pose leftPose={
+                    offsetZ_left,-Spac,0 + offsetX_left,
+                    0, 0, 0
+                    };
+                    FootController::Pose rightPose={
+                    offsetZ_right,+Spac,0 + offsetX_right,
+                    0, 0, 0
+                    };
+                    // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                    leftFoot.setTargetPose(leftPose);
+                    rightFoot.setTargetPose(rightPose);
+                    return false;
+                }
+            }
+            return true;//実行中は、trueを返す
+        }else{
+            
+            GaitParameters &param_p = Config::MV_Y_SINGLE;
+            // 毎フレーム定義・計算する変数（ローカル変数）
+            float T = param_p.T;
+            float h = param_p.h;
+            float DutyX = param_p.DutyX;
+            float DutyY = param_p.DutyY;
+            int Fps = param_p.Fps;
+            float Spac = param_p.Spac;
+            float Wd = param_p.Wd;
+
+            float offsetZ_left = param_p.offsetZ_left;
+            float offsetX_left = param_p.offsetX_left;
+            float offsetZ_right = param_p.offsetZ_right;
+            float offsetX_right = param_p.offsetX_right;
+
+            float kickX_left_val = param_p.kickX_left;
+            float kickY_left_val = param_p.kickY_left;
+            float kickX_right_val = param_p.kickX_right;
+            float kickY_right_val = param_p.kickY_right;
+            float push_window = param_p.kickTime;
+
+            int totalFrames = (int)(T * Fps);
+
+            // 状態を維持する必要がある変数のみ static にする
+            static int taskPhase = 0;
+            static int frame = 0;
+
+            //左右に移動
+            static float moveValue;
+
+            switch (taskPhase){
+                case 0:
+                {
+                    taskPhase = 2;//スキップ
+                    moveValue = 0;
+                    break;
+                }
+                case 1:
+                {
+                    //歩行準備
+                    //if(!startWalking(param_p))taskPhase = 2;
+                    taskPhase = 2;
+                    break;
+                }
+                case 2:
+                {
+                    // 経過時間 ts の計算 (秒)
+                    float ts_left = (float)frame / Fps;
+                    // 右足は位相を半周期 (T / 2.0) ずらす
+                    float ts_right = fmod(ts_left + (T / 2.0f), T);
+                    
+                    moveValue = moveValue + (-(float)Dualshock4.data.button.left + (float)Dualshock4.data.button.right)*0.05;
+                    if(moveValue > 1){
+                        moveValue = 1;
+                    }else if(moveValue < -1){
+                        moveValue = -1;
+                    }
+
+                    Serial.printf("Dualshock4.data.button.left:%d Dualshock4.data.button.right:%d moveValue:%f\n",Dualshock4.data.button.left,Dualshock4.data.button.right,moveValue);
+
+                    // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+                    Vector2 leftPosXY = {0,0};
+                    Vector2 rightPosXY = {0,0};
                     leftPosXY = leftFoot.tread(h,Wd*moveValue,DutyX,DutyY,T,ts_left);
-                }else{
                     rightPosXY = rightFoot.tread(h,Wd*moveValue,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
+                    
+                    if(moveValue==1){//足の上下はさせるが、水平方向の足の動きはさせない。
+                        rightPosXY.x = 0;
+                        rightPosXY.y = rightPosXY.y;
+                    }else{
+                        leftPosXY.x = 0;
+                        leftPosXY.y = leftPosXY.y;
+                    }
+
+                    float kick_x_left = 0.0f;
+                    float kick_y_left = 0.0f;
+                    float angle_left=0;
+
+                    float kick_x_right = 0.0f;
+                    float kick_y_right = 0.0f;
+                    float angle_right=0;
+
+                    // 接地期の終盤で後ろ・下へ押し込む
+                    float support_end = DutyX * T / 2.0f;
+                    
+                    float angle_def = -((30)*PI/360) * moveValue;
+
+                    if (ts_left > (support_end - push_window) && ts_left < support_end) {
+                        kick_x_left = kickX_left_val - 0;
+                        kick_y_left = kickY_left_val + 0;
+                    }
+
+                    if (ts_right > (support_end - push_window) && ts_right < support_end) {
+                        kick_x_right = kickX_right_val - 0;
+                        kick_y_right = kickY_right_val + 0;
+                    }
+
+                    FootController::Pose leftPose={
+                    offsetZ_left-leftPosXY.y,-Spac-leftPosXY.x,0 + offsetX_left,
+                    0, 0, 0
+                    };
+
+                    FootController::Pose rightPose={
+                    offsetZ_right-rightPosXY.y,+Spac-rightPosXY.x ,0 + offsetX_right,
+                    0, 0, 0
+                    };
+
+                    // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                    leftFoot.setTargetPose(leftPose,angle_def);
+                    rightFoot.setTargetPose(rightPose,angle_def);
+
+                    if(frame < totalFrames){
+                        frame++;
+                    }else{
+                        frame = 0;
+                    }
+
+                    //行進のコントローラがない場合、または、回転のボタンが押された場合は抜ける。 
+                    if((!Dualshock4.data.button.left && !Dualshock4.data.button.right) && (frame>=totalFrames)){//最終フレームで抜けるように
+                        taskPhase = 3;
+                        frame = 0;
+                    }
+                    break;
+                }        
+                case 3:
+                {
+                    taskPhase = 0;
+                    FootController::Pose leftPose={
+                    offsetZ_left,-Spac,0 + offsetX_left,
+                    0, 0, 0
+                    };
+                    FootController::Pose rightPose={
+                    offsetZ_right,+Spac,0 + offsetX_right,
+                    0, 0, 0
+                    };
+                    // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                    leftFoot.setTargetPose(leftPose);
+                    rightFoot.setTargetPose(rightPose);
+                    return false;
                 }
+            }
+            return true;//実行中は、trueを返す
+        }
+    }
 
-                float kick_x_left = 0.0f;
-                float kick_y_left = 0.0f;
-                float angle_left=0;
+    bool turn::motionLoop(){
 
-                float kick_x_right = 0.0f;
-                float kick_y_right = 0.0f;
-                float angle_right=0;
+        const char flag = 0;
+        if(flag){
+            GaitParameters &param_p = Config::MV_X_PARAM_TURN;
 
-                // 接地期の終盤で後ろ・下へ押し込む
-                float support_end = DutyX * T / 2.0f;
-                
-                float angle_def = -((30)*PI/360) * moveValue;
+            // 毎フレーム定義・計算する変数（ローカル変数）
+            float T = param_p.T;
+            float h = param_p.h;
+            float DutyX = param_p.DutyX;
+            float DutyY = param_p.DutyY;
+            int Fps = param_p.Fps;
+            float Spac = param_p.Spac;
+            float Wd = param_p.Wd;
 
-                if (ts_left > (support_end - push_window) && ts_left < support_end) {
-                    kick_x_left = kickX_left_val - 0;
-                    kick_y_left = kickY_left_val + 0;
+            float offsetZ_left = param_p.offsetZ_left;
+            float offsetX_left = param_p.offsetX_left;
+            float offsetZ_right = param_p.offsetZ_right;
+            float offsetX_right = param_p.offsetX_right;
+
+            float kickX_left_val = param_p.kickX_left;
+            float kickY_left_val = param_p.kickY_left;
+            float kickX_right_val = param_p.kickX_right;
+            float kickY_right_val = param_p.kickY_right;
+            float push_window = param_p.kickTime;
+
+            int totalFrames = (int)(T * Fps);
+
+            // 状態を維持する必要がある変数のみ static にする
+            static int taskPhase = 0;
+            static int frame = 0;
+
+            switch (taskPhase){
+                case 0:
+                {
+                    Serial.print(F("turn \n"));
+                    for(int i=0;i<19;i++){
+                        ServoArray[i]->setStretch(stretch);
+                        delay(5);
+                    }
+
+                    taskPhase = 1;
+                    break;
                 }
-
-                if (ts_right > (support_end - push_window) && ts_right < support_end) {
-                    kick_x_right = kickX_right_val - 0;
-                    kick_y_right = kickY_right_val + 0;
+                case 1:
+                {
+                    //歩行準備
+                    taskPhase = 2;
+                    break;
                 }
+                case 2:
+                {
+                    // 経過時間 ts の計算 (秒)
+                    float ts_left = (float)frame / Fps;
+                    // 右足は位相を半周期 (T / 2.0) ずらす
+                    float ts_right = fmod(ts_left + (T / 2.0f), T);
 
-                FootController::Pose leftPose={
-                offsetZ_left-leftPosXY.y,-Spac-leftPosXY.x,0 + offsetX_left,
-                0, 0, 0
-                };
+                    int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
 
-                FootController::Pose rightPose={
-                offsetZ_right-rightPosXY.y,+Spac-rightPosXY.x ,0 + offsetX_right,
-                0, 0, 0
-                };
+                    float wd_left = -Wd * (stick_lx*0.01);
+                    float wd_right = Wd * (stick_lx*0.01);
 
-                // 逆運動学 (IK) を介して各足のサーボへ指令を出力
-                leftFoot.setTargetPose(leftPose,angle_def);
-                rightFoot.setTargetPose(rightPose,angle_def);
+                    // 軌道生成処理 (FootController.cpp の tread 関数を利用)
+                    Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
+                    Vector2 rightPosXY = rightFoot.tread(h,wd_right,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
 
-                if(frame < totalFrames){
-                    frame++;
-                }else{
-                    frame = 0;
-                }
+                    float kick_x_left = 0.0f;
+                    float kick_y_left = 0.0f;
+                    float angle_left=0;
 
-                //行進のコントローラがない場合、または、回転のボタンが押された場合は抜ける。 
-                if((!Dualshock4.data.button.left && !Dualshock4.data.button.right) && (frame>=totalFrames)){//最終フレームで抜けるように
-                    taskPhase = 3;
-                    frame = 0;
-                }
-                break;
-            }        
-            case 3:
-            {
-                //歩行準備
-                if(!endWalking(param_p)){
+                    float kick_x_right = 0.0f;
+                    float kick_y_right = 0.0f;
+                    float angle_right=0;
+
+                    // 接地期の終盤で後ろ・下へ押し込む
+                    float support_end = DutyX * T / 2.0f;
+
+                    if (ts_left > (support_end - push_window) && ts_left < support_end) {
+                        kick_x_left = kickX_left_val - 0;
+                        kick_y_left = kickY_left_val + 0;
+                        angle_left = 0;
+                    }
+
+                    if (ts_right > (support_end - push_window) && ts_right < support_end) {
+                        kick_x_right = kickX_right_val - 0;
+                        kick_y_right = kickY_right_val + 0;
+                        angle_right = 0;
+                    }
+
+                    FootController::Pose leftPose={
+                    offsetZ_left-leftPosXY.y - kick_y_left,-Spac-40,-leftPosXY.x + offsetX_left + kick_x_left*(stick_lx*0.01),
+                    angle_left, 0, 0
+                    };
+
+                    FootController::Pose rightPose={
+                    offsetZ_right-rightPosXY.y - kick_y_right,+Spac-40,-rightPosXY.x + offsetX_right + kick_x_right*(stick_lx*0.01),
+                    angle_right, 30,0 
+                    };
+
+                    // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                    leftFoot.setTargetPose(leftPose);
+                    //rightFoot.setTargetPose(rightPose);
+
+                    if(frame < totalFrames){
+                        frame++;
+                    }else{
+                        frame = 0;
+                    }
+
+                    int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
+                    //行進のコントローラがない場合、または、回転のボタンが押された場合は抜けない
+                    if(!Dualshock4.data.button.l3 && frame>=totalFrames){//最終フレームで抜けるように
+                        taskPhase = 3;
+                        frame = 0;
+                    }
+                    break;
+                }        
+                case 3:
+                {
                     taskPhase = 0;
                     return false;//終了時は、falseを返す
                 }
             }
-        }
-        return true;//実行中は、trueを返す
-    }
+            return true;//実行中は、trueを返す
+        }else{
+            static int taskDelay=0;
 
-    bool turn::motionLoop(){
-        GaitParameters &param_p = Config::MV_X_PARAM_TURN;
-
-        // 毎フレーム定義・計算する変数（ローカル変数）
-        float T = param_p.T;
-        float h = param_p.h;
-        float DutyX = param_p.DutyX;
-        float DutyY = param_p.DutyY;
-        int Fps = param_p.Fps;
-        float Spac = param_p.Spac;
-        float Wd = param_p.Wd;
-
-        float offsetZ_left = param_p.offsetZ_left;
-        float offsetX_left = param_p.offsetX_left;
-        float offsetZ_right = param_p.offsetZ_right;
-        float offsetX_right = param_p.offsetX_right;
-
-        float kickX_left_val = param_p.kickX_left;
-        float kickY_left_val = param_p.kickY_left;
-        float kickX_right_val = param_p.kickX_right;
-        float kickY_right_val = param_p.kickY_right;
-        float push_window = param_p.kickTime;
-
-        int totalFrames = (int)(T * Fps);
-
-        // 状態を維持する必要がある変数のみ static にする
-        static int taskPhase = 0;
-        static int frame = 0;
-
-        switch (taskPhase){
+            static int taskPhase=0;
+            switch (taskPhase)
+            {
             case 0:
             {
-                Serial.print(F("turn \n"));
-                for(int i=0;i<19;i++){
-                    ServoArray[i]->setStretch(stretch);
-                    delay(5);
-                }
-
-                taskPhase = 1;
-                break;
-            }
-            case 1:
-            {
-                //歩行準備
-                taskPhase = 2;
-                break;
-            }
-            case 2:
-            {
-                // 経過時間 ts の計算 (秒)
-                float ts_left = (float)frame / Fps;
-                // 右足は位相を半周期 (T / 2.0) ずらす
-                float ts_right = fmod(ts_left + (T / 2.0f), T);
-
-                int stick_lx = map_controller(Dualshock4.data.analog.stick.lx,20,-128,127,-100,100);
-
-                float wd_left = -Wd * (stick_lx*0.01);
-                float wd_right = Wd * (stick_lx*0.01);
-
-                // 軌道生成処理 (FootController.cpp の tread 関数を利用)
-                Vector2 leftPosXY = leftFoot.tread(h,wd_left,DutyX,DutyY,T,ts_left);
-                Vector2 rightPosXY = rightFoot.tread(h,wd_right,DutyX,DutyY,T,phaseShift_f(ts_left,T/2.0));
-
-                float kick_x_left = 0.0f;
-                float kick_y_left = 0.0f;
-                float angle_left=0;
-
-                float kick_x_right = 0.0f;
-                float kick_y_right = 0.0f;
-                float angle_right=0;
-
-                // 接地期の終盤で後ろ・下へ押し込む
-                float support_end = DutyX * T / 2.0f;
-
-                if (ts_left > (support_end - push_window) && ts_left < support_end) {
-                    kick_x_left = kickX_left_val - 0;
-                    kick_y_left = kickY_left_val + 0;
-                    angle_left = 0;
-                }
-
-                if (ts_right > (support_end - push_window) && ts_right < support_end) {
-                    kick_x_right = kickX_right_val - 0;
-                    kick_y_right = kickY_right_val + 0;
-                    angle_right = 0;
-                }
-
                 FootController::Pose leftPose={
-                offsetZ_left-leftPosXY.y - kick_y_left,-Spac-40,-leftPosXY.x + offsetX_left + kick_x_left*(stick_lx*0.01),
-                angle_left, 0, 0
+                NeutralPoseY,-NeutralSpac*0.5,NeutralPoseX,
+                0, 0, 0
                 };
 
                 FootController::Pose rightPose={
-                offsetZ_right-rightPosXY.y - kick_y_right,+Spac-40,-rightPosXY.x + offsetX_right + kick_x_right*(stick_lx*0.01),
-                angle_right, 30,0 
+                NeutralPoseY,+NeutralSpac*0.5,NeutralPoseX,
+                0, 0, 0
                 };
 
                 // 逆運動学 (IK) を介して各足のサーボへ指令を出力
                 leftFoot.setTargetPose(leftPose);
-                //rightFoot.setTargetPose(rightPose);
-
-                if(frame < totalFrames){
-                    frame++;
-                }else{
-                    frame = 0;
-                }
-
-                int stick_ly = map_controller(Dualshock4.data.analog.stick.ly,20,-128,127,-10,10);
-                //行進のコントローラがない場合、または、回転のボタンが押された場合は抜けない
-                if(!Dualshock4.data.button.l3 && frame>=totalFrames){//最終フレームで抜けるように
-                    taskPhase = 3;
-                    frame = 0;
+                rightFoot.setTargetPose(rightPose);
+                ServoArray[0]->setPosDeg(0);
+                taskPhase=1;
+            }
+            case 1:
+            {
+                taskDelay++;
+                if(taskDelay>(int)(G_fps*0.15)){//0.1秒間だけ固定
+                    taskPhase++;
+                    taskDelay=0;
                 }
                 break;
-            }        
+            }
+            case 2:
+            {
+                taskDelay=0;
+
+                FootController::Pose leftPose={
+                NeutralPoseY+30,-NeutralSpac*0.5,NeutralPoseX,
+                0, 0, 0
+                };
+
+                FootController::Pose rightPose={
+                NeutralPoseY+30,+NeutralSpac*0.5,NeutralPoseX,
+                0, 0, 0
+                };
+
+                // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                leftFoot.setTargetPose(leftPose);
+                rightFoot.setTargetPose(rightPose);
+                
+                ServoArray[0]->setPosDeg(30);
+                
+                taskPhase++;
+                break;
+            }
             case 3:
             {
-                taskPhase = 0;
-                return false;//終了時は、falseを返す
+                taskDelay++;
+                if(taskDelay>(int)(G_fps*0.1)){//0.1秒間だけ固定
+                    taskPhase++;
+                    taskDelay=0;
+                }
+                break;
             }
+            case 4:
+            {
+                ServoArray[0]->setPosDeg(0);
+                FootController::Pose leftPose={
+                NeutralPoseY,-NeutralSpac*0.5,NeutralPoseX,
+                0, 0, 0
+                };
+
+                FootController::Pose rightPose={
+                NeutralPoseY,+NeutralSpac*0.5,NeutralPoseX,
+                0, 0, 0
+                };
+
+                // 逆運動学 (IK) を介して各足のサーボへ指令を出力
+                leftFoot.setTargetPose(leftPose);
+                rightFoot.setTargetPose(rightPose);
+
+                taskPhase=0;
+                return false;
+                break;
+            }
+            }
+            return true;
         }
-        return true;//実行中は、trueを返す
     }
 
     bool sit_stand::motionLoop(){
@@ -1928,21 +2265,7 @@ namespace motion {
         return true; // モーション継続中
     }
 
-    bool attack_Heavy_1::motionLoop(){//TEST
-        namespace target = attack_1_Test_2;//ここだけ書き換える。
-        Serial.printf("!\n");
-
-        static int taskPhase = 0;
-        static uint16_t currentFrame = 0;
-        
-        return playCodeMotion(
-            target::flameData,
-            target::flameNum,
-            this->motionArrUsingBit,
-            taskPhase,
-            currentFrame
-        );
-    }
+    // attack_Heavy_1 の motionLoop は motionDataBase により定義不要となったため削除
 
     bool attack_Heavy_2::motionLoop(){
         Serial.printf("attack_Heavy_2!\n");
@@ -2318,94 +2641,274 @@ namespace motion {
         return false; // 次のメインループで次フレームを生成する
     }
 
-    bool TeachingMode::motionLoop() {
-        uint8_t request[45] = {0};
-        portENTER_CRITICAL(&g_teachCmdMux);
-        if (!g_teachCmdPending || g_teachCmdProcessing || g_teachRxLength != sizeof(request)) {
-            portEXIT_CRITICAL(&g_teachCmdMux);
+    // ----------------------------------------------------------------
+    // 同期(TX)モードの1周期処理。ブロッキングせず、毎周期:
+    //  1. メールボックスから最新の軸/座標指令を取り出す
+    //  2. 座標指令はマイコン側でIK計算 → 軸目標(絶対ICS)へ変換
+    //  3. 全軸の目標へ一次遅れ+速度制限で滑らかに追従して出力（PC側の送信間隔が
+    //     揺れても動きが階段状にならない）
+    //  4. FB要求軸を1周期1軸ずつ読む（1軸の応答待ちで全体が止まらない）
+    //  5. 全軸の現在値+エラーを 42B [0x01][Err:3B][19*2B] で返す（変化時/250ms毎）
+    // ----------------------------------------------------------------
+    namespace {
+    constexpr float    TEACH_ALPHA = 0.35f;        // 追従係数(0..1)。大きいほど機敏
+    constexpr float    TEACH_MAX_STEP = 600.0f;    // 1周期あたりの最大移動量[ICS]
+    constexpr uint32_t TEACH_HEARTBEAT_MS = 250;
+    constexpr uint32_t TEACH_AXIS_GAP_MS = 1;      // UART送信後の待ち。0〜2で調整
+    constexpr int      TEACH_ICS_MIN = 3500;
+    constexpr int      TEACH_ICS_MAX = 11500;
+    constexpr uint8_t  TEACH_FOOT_FIRST[2] = {9, 14};          // 左足/右足の先頭サーボID
+    constexpr uint32_t TEACH_FOOT_MASK[2] = {0x3E00UL, 0x7C000UL}; // bit9..13 / bit14..18
+
+    float    g_tCur[19];
+    float    g_tTarget[19];
+    uint32_t g_tHasTarget = 0;
+    int32_t  g_tLastSent[19];
+    uint32_t g_tIkErr = 0;
+    uint32_t g_tFbErr = 0;
+    uint32_t g_tFbMask = 0;
+    uint32_t g_tFbValid = 0;
+    uint16_t g_tFbIcs[19];
+    uint8_t  g_tFbRR = 0;
+    // setPos()系の値 → 絶対ICSへの差分。最初の座標指令で学習する（足軸のみ）。
+    int32_t  g_tDelta[19];
+    uint32_t g_tDeltaKnown = 0;
+    uint8_t  g_tLastResp[42];
+    bool     g_tRespValid = false;
+    uint32_t g_tLastRespMs = 0;
+
+    void teachReset() {
+        g_tHasTarget = 0;
+        g_tIkErr = 0;
+        g_tFbErr = 0;
+        g_tFbMask = 0;
+        g_tFbValid = 0;
+        g_tFbRR = 0;
+        g_tRespValid = false;
+        for (int i = 0; i < 19; ++i) {
+            g_tCur[i] = 0;
+            g_tTarget[i] = 0;
+            g_tLastSent[i] = -1;
+            g_tFbIcs[i] = 0;
+        }
+    }
+
+    inline bool validIcs(int32_t v) { return v >= TEACH_ICS_MIN && v <= TEACH_ICS_MAX; }
+
+    void teachSetTarget(int i, float t) {
+        const uint32_t bit = (1UL << i);
+        if (!(g_tHasTarget & bit)) {
+            // 現在のサーボ位置から滑らかに動かし始める。現在位置が不明ならその場で目標へ。
+            const int32_t last = static_cast<int32_t>(ServoArray[i]->getLastSetPosIcs());
+            if (validIcs(last)) {
+                g_tCur[i] = static_cast<float>(last);
+                g_tLastSent[i] = last;
+            } else {
+                g_tCur[i] = t;
+                g_tLastSent[i] = -1;
+            }
+            g_tHasTarget |= bit;
+        }
+        g_tTarget[i] = t;
+    }
+
+    void teachFree(int i) {
+        ServoArray[i]->setPosFree();
+        g_tHasTarget &= ~(1UL << i);
+        g_tLastSent[i] = -1;
+    }
+
+    bool teachApplyPose(int f, const TeachPoseCmd& pc) {
+        FootController& foot = (f == 0) ? leftFoot : rightFoot;
+        const int base = TEACH_FOOT_FIRST[f];
+        const uint32_t fmask = TEACH_FOOT_MASK[f];
+        FootController::Pose pose = {pc.v[0], pc.v[1], pc.v[2], pc.v[3], pc.v[4], pc.v[5]};
+        long out[5];
+        if (!foot.computeJointPos(pose, 0.0f, pc.mode, out)) {
+            g_tIkErr |= fmask;   // 到達不可。直前の姿勢を保持してPCへエラー通知
             return false;
         }
-        g_teachCmdProcessing = true;
-        memcpy(request, g_teachRxBuffer, sizeof(request));
+        for (int k = 0; k < 5; ++k) {
+            if (ServoArray[base + k] == nullptr) { g_tIkErr |= fmask; return false; }
+        }
+
+        if ((g_tDeltaKnown & fmask) == fmask) {
+            int32_t absT[5];
+            for (int k = 0; k < 5; ++k) {
+                absT[k] = static_cast<int32_t>(out[k]) + g_tDelta[base + k];
+                if (!validIcs(absT[k])) { g_tIkErr |= fmask; return false; }
+            }
+            g_tIkErr &= ~fmask;
+            for (int k = 0; k < 5; ++k) teachSetTarget(base + k, static_cast<float>(absT[k]));
+        } else {
+            // 初回のみ: ライブラリ経由で直接指令し、実際に設定された絶対ICSとの差分を学習する。
+            g_tIkErr &= ~fmask;
+            foot.setJointAngles(out[0], out[1], out[2], out[3], out[4]);
+            delay(5);
+            bool ok = true;
+            int32_t last[5];
+            for (int k = 0; k < 5; ++k) {
+                last[k] = static_cast<int32_t>(ServoArray[base + k]->getLastSetPosIcs());
+                if (!validIcs(last[k])) ok = false;
+            }
+            if (ok) {
+                for (int k = 0; k < 5; ++k) {
+                    const int i = base + k;
+                    g_tDelta[i] = last[k] - static_cast<int32_t>(out[k]);
+                    g_tCur[i] = g_tTarget[i] = static_cast<float>(last[k]);
+                    g_tLastSent[i] = last[k];
+                    g_tHasTarget |= (1UL << i);
+                }
+                g_tDeltaKnown |= fmask;
+                Serial.printf("[TEACH] foot%d IK offset learned: %ld %ld %ld %ld %ld\n", f,
+                    (long)g_tDelta[base], (long)g_tDelta[base + 1], (long)g_tDelta[base + 2],
+                    (long)g_tDelta[base + 3], (long)g_tDelta[base + 4]);
+            }
+        }
+        return true;
+    }
+    } // namespace
+
+    bool TeachingMode::motionLoop() {
+        if (!deviceConnected || !g_teachModeActive) return false;
+
+        // --- 1. メールボックス取り出し ---
+        TeachAxisCmd axis;
+        bool hasAxis = false;
+        TeachPoseCmd poses[2];
+        bool hasPose[2] = {false, false};
+        bool neutral[2] = {false, false};
+        bool reset = false;
+        portENTER_CRITICAL(&g_teachCmdMux);
+        reset = g_teachNeedReset;
+        g_teachNeedReset = false;
+        if (g_axisPendingValid) {
+            axis = g_axisPending;
+            hasAxis = true;
+            g_axisPendingValid = false;
+        }
+        for (int f = 0; f < 2; ++f) {
+            if (g_posePendingValid[f]) {
+                poses[f] = g_posePending[f];
+                hasPose[f] = true;
+                g_posePendingValid[f] = false;
+            }
+            neutral[f] = g_poseNeutralReq[f];
+            g_poseNeutralReq[f] = false;
+        }
+        g_teachCmdPending = false;
         portEXIT_CRITICAL(&g_teachCmdMux);
 
-        Serial.println("[TeachingMode] Processing one blocking teaching request.");
+        if (reset) teachReset();
 
-        // Request layout:
-        // [0]=0x01, [1..3]=CommandMask, [4..6]=FeedbackMask,
-        // [7..44]=19 x uint16 little-endian ICS.
-        const uint32_t commandMask = static_cast<uint32_t>(request[1]) |
-                                     (static_cast<uint32_t>(request[2]) << 8) |
-                                     (static_cast<uint32_t>(request[3]) << 16);
-        const uint32_t fbModeMask = static_cast<uint32_t>(request[4]) |
-                                   (static_cast<uint32_t>(request[5]) << 8) |
-                                   (static_cast<uint32_t>(request[6]) << 16);
-
-        // Response: [0x01][ErrorMask:3B][FeedbackAngles:19*2B] = 42 bytes.
-        uint8_t response[42] = {0};
-        response[0] = 0x01;
-        uint32_t errorMask = 0;
-
-        // ブロッキング区間。全軸の指令／FBをこのメインループから順番に実行する。
-        for (int i = 0; i < 19; ++i) {
-            const uint32_t bit = (1UL << i);
-            const size_t angleOffset = 7 + (static_cast<size_t>(i) * 2);
-            uint16_t currentIcs = 0;
-
-            // PC側で無効化されたサーボはCommandMask/FeedbackMaskとも0。
-            // この軸については、存在確認・UART送信・返り値取得をすべて行わない。
-            if (((commandMask | fbModeMask) & bit) == 0) {
-                currentIcs = 0;
-            } else if (ServoArray[i] == nullptr) {
-                if ((fbModeMask & bit) != 0) errorMask |= bit;
-            } else {
-                if ((commandMask & bit) != 0) {
-                    const uint16_t targetIcs = static_cast<uint8_t>(request[angleOffset]) |
-                                               (static_cast<uint16_t>(static_cast<uint8_t>(request[angleOffset + 1])) << 8);
-                    if (targetIcs == 0) {
-                        ServoArray[i]->setPosFree();
-                    } else {
-                        ServoArray[i]->setPosIcs(targetIcs, false);
-                    }
-                }
-
-                if ((fbModeMask & bit) != 0) {
-                    // 実角度モード。失敗／タイムアウト時はエラービットを立て、指令角度を返す。
-                    auto result = ServoArray[i]->getPosIcs();
-                    if (!result.success) {
-                        errorMask |= bit;
-                        currentIcs = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
-                    } else {
-                        currentIcs = static_cast<uint16_t>(result.value);
-                    }
+        // --- 2. 軸指令 ---
+        if (hasAxis) {
+            g_tFbMask = axis.fbMask;
+            for (int i = 0; i < 19; ++i) {
+                const uint32_t bit = (1UL << i);
+                if (!(axis.cmdMask & bit)) continue;
+                if (ServoArray[i] == nullptr) { g_tFbErr |= bit; continue; }
+                if (axis.ics[i] == 0) {
+                    teachFree(i);
                 } else {
-                    currentIcs = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
+                    int32_t v = axis.ics[i];
+                    if (v < TEACH_ICS_MIN) v = TEACH_ICS_MIN;
+                    if (v > TEACH_ICS_MAX) v = TEACH_ICS_MAX;
+                    teachSetTarget(i, static_cast<float>(v));
                 }
             }
-
-            const size_t responseOffset = 4 + (static_cast<size_t>(i) * 2);
-            response[responseOffset] = static_cast<uint8_t>(currentIcs & 0xFF);
-            response[responseOffset + 1] = static_cast<uint8_t>((currentIcs >> 8) & 0xFF);
-            delay(2);
         }
 
-        response[1] = static_cast<uint8_t>(errorMask & 0xFF);
-        response[2] = static_cast<uint8_t>((errorMask >> 8) & 0xFF);
-        response[3] = static_cast<uint8_t>((errorMask >> 16) & 0xFF);
-
-        // 処理済みフラグを通知送信前に解除し、次の要求との競合を避ける。
-        portENTER_CRITICAL(&g_teachCmdMux);
-        g_teachCmdPending = false;
-        g_teachCmdProcessing = false;
-        g_teachRxLength = 0;
-        portEXIT_CRITICAL(&g_teachCmdMux);
-
-        if (g_teachModeActive && deviceConnected) {
-            sendBLE(response, sizeof(response));
+        // --- 3. 座標(IK)指令 ---
+        for (int f = 0; f < 2; ++f) {
+            if (neutral[f]) {
+                TeachPoseCmd n;
+                n.v[0] = static_cast<float>(NeutralPoseY);                              // X(上下)
+                n.v[1] = (f == 0) ? -static_cast<float>(NeutralSpac) : static_cast<float>(NeutralSpac); // Y(左右)
+                n.v[2] = static_cast<float>(NeutralPoseX);                              // Z(前後)
+                n.v[3] = n.v[4] = n.v[5] = 0.0f;
+                n.mode = 0;
+                teachApplyPose(f, n);
+                uint8_t echo[26];
+                echo[0] = 0x37;
+                echo[1] = static_cast<uint8_t>(f);
+                memcpy(echo + 2, n.v, sizeof(n.v));
+                sendBLE(echo, sizeof(echo));
+            } else if (hasPose[f]) {
+                teachApplyPose(f, poses[f]);
+            }
         }
-        return false; // 1要求を完了。ALL_BITを解放する。
+
+        // --- 4. 目標への滑らかな追従出力 ---
+        for (int i = 0; i < 19; ++i) {
+            const uint32_t bit = (1UL << i);
+            if (!(g_tHasTarget & bit) || ServoArray[i] == nullptr) continue;
+            const float diff = g_tTarget[i] - g_tCur[i];
+            if (fabsf(diff) <= 1.0f) {
+                g_tCur[i] = g_tTarget[i];
+            } else {
+                float step = diff * TEACH_ALPHA;
+                if (fabsf(step) < 1.0f) step = (diff > 0) ? 1.0f : -1.0f;
+                if (step > TEACH_MAX_STEP) step = TEACH_MAX_STEP;
+                if (step < -TEACH_MAX_STEP) step = -TEACH_MAX_STEP;
+                g_tCur[i] += step;
+            }
+            const int32_t v = static_cast<int32_t>(lroundf(g_tCur[i]));
+            if (v != g_tLastSent[i]) {
+                ServoArray[i]->setPosIcs(static_cast<uint16_t>(v), false);
+                g_tLastSent[i] = v;
+                if (TEACH_AXIS_GAP_MS) delay(TEACH_AXIS_GAP_MS);
+            }
+        }
+
+        // --- 5. FB読み取り（1周期1軸のラウンドロビン） ---
+        g_tFbValid &= g_tFbMask;
+        g_tFbErr &= (g_tFbMask | g_tIkErr); // 解除されたFB要求のエラーは消す
+        if (g_tFbMask) {
+            for (int n = 0; n < 19; ++n) {
+                g_tFbRR = static_cast<uint8_t>((g_tFbRR + 1) % 19);
+                const int i = g_tFbRR;
+                const uint32_t bit = (1UL << i);
+                if (!(g_tFbMask & bit) || ServoArray[i] == nullptr) continue;
+                auto r = ServoArray[i]->getPosIcs();
+                if (r.success) {
+                    g_tFbIcs[i] = static_cast<uint16_t>(r.value);
+                    g_tFbValid |= bit;
+                    g_tFbErr &= ~bit;
+                } else {
+                    g_tFbValid &= ~bit;
+                    g_tFbErr |= bit;
+                }
+                break;
+            }
+        }
+
+        // --- 6. 応答 [0x01][Err:3B][19*2B] ---
+        uint8_t resp[42] = {0};
+        resp[0] = 0x01;
+        const uint32_t err = (g_tIkErr | g_tFbErr) & TEACH_ALL_MASK;
+        resp[1] = static_cast<uint8_t>(err & 0xFF);
+        resp[2] = static_cast<uint8_t>((err >> 8) & 0xFF);
+        resp[3] = static_cast<uint8_t>((err >> 16) & 0xFF);
+        for (int i = 0; i < 19; ++i) {
+            uint16_t v = 0;
+            if (ServoArray[i] != nullptr) {
+                if (g_tFbValid & (1UL << i)) v = g_tFbIcs[i];
+                else v = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
+            }
+            resp[4 + i * 2] = static_cast<uint8_t>(v & 0xFF);
+            resp[5 + i * 2] = static_cast<uint8_t>((v >> 8) & 0xFF);
+        }
+        const uint32_t now = millis();
+        if (!g_tRespValid || memcmp(resp, g_tLastResp, sizeof(resp)) != 0 ||
+            (now - g_tLastRespMs) >= TEACH_HEARTBEAT_MS) {
+            memcpy(g_tLastResp, resp, sizeof(resp));
+            g_tRespValid = true;
+            g_tLastRespMs = now;
+            sendBLE(resp, sizeof(resp));
+        }
+        return false; // 常駐処理ではなく毎周期の呼び出し。ALL_BITは占有しない。
     }
 
     /*****ここまで***** */
 }
-

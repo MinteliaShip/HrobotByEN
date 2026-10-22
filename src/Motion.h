@@ -36,12 +36,51 @@ public:
     char motionArrUsingBit = 0;
 };
 
+// モーションデータ逐次再生関数の前方宣言
+bool playCodeMotion(const int16_t motionData[][19], uint16_t totalFrames, char motionArrUsingBit, int &taskPhase, uint16_t &currentFrame);
+
+// MotionData系モーションの共通基底クラス
+class motionDataBase : public motionBase {
+protected:
+    const int16_t (*motionData)[19];
+    uint16_t totalFrames;
+    int taskPhase = 0;
+    uint16_t currentFrame = 0;
+
+public:
+    motionDataBase(const int16_t motionData[][19], uint16_t totalFrames, char usingBit = ALL_BIT)
+        : motionBase(usingBit), motionData(motionData), totalFrames(totalFrames) {}
+
+    bool motionLoop() override {
+        return playCodeMotion(
+            motionData,
+            totalFrames,
+            this->motionArrUsingBit,
+            taskPhase,
+            currentFrame
+        );
+    }
+
+    void resetState() {
+        taskPhase = 0;
+        currentFrame = 0;
+    }
+};
+
 #define DECLARE_MOTION(ClassName, UsingBit) \
     class ClassName : public motionBase { \
     public: \
         ClassName(char bit = UsingBit) : motionBase(bit) {} \
         bool canStart() override; \
         bool motionLoop() override; \
+    }; \
+    inline ClassName ClassName##_inst;
+
+#define DECLARE_DATA_MOTION(ClassName, TargetNamespace, UsingBit) \
+    class ClassName : public motionDataBase { \
+    public: \
+        ClassName() : motionDataBase(TargetNamespace::flameData, TargetNamespace::flameNum, UsingBit) {} \
+        bool canStart() override; \
     }; \
     inline ClassName ClassName##_inst;
 
@@ -55,7 +94,9 @@ namespace motion {
     DECLARE_MOTION(attack_Light_right, RIGHT_ARM_BIT)
     DECLARE_MOTION(attack_Medium_left, LEFT_ARM_BIT)
     DECLARE_MOTION(attack_Medium_right, RIGHT_ARM_BIT)
-    DECLARE_MOTION(attack_Heavy_1, ALL_BIT)
+    
+    // MotionData指定による簡略化宣言
+    DECLARE_DATA_MOTION(attack_Heavy_1, Attack_left_flont, ALL_BIT)
     DECLARE_MOTION(attack_Heavy_2, ALL_BIT)
 
     DECLARE_MOTION(taunt, ALL_BIT)
