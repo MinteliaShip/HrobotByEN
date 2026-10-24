@@ -98,20 +98,6 @@ Vector2 FootController::tread(float h, float Wd, float DutyX, float DutyY, float
     return result;
 }
 
-float FootController::tread_kick(float kickAngle, float T1, float T, float Duty, float ts) {
-    float av = 2 * PI / T1;
-    float kick = 0;
-
-    if (ts < (Duty * T / 2.0f) - T1) {
-        kick = 0;
-    } else if (ts < Duty * T / 2.0f) {
-        kick = -kickAngle * cos(av * (ts - (Duty * T / 2.0f) - T1)) + kickAngle;
-    } else {
-        kick = 0;
-    }
-    return kick;
-}
-
 void FootController::FootMotorInvert(int J1_, int J2_, int J3_, int J4_, int J5_) {
     JointInv[0] = J1_;
     JointInv[1] = J2_;
@@ -135,26 +121,6 @@ void FootController::setJointAngles(long J1_, long J2_, long J3_, long J4_, long
     servoJ3->setPos(J3_);
     servoJ4->setPos(J4_);
     servoJ5->setPos(J5_);
-}
-
-void FootController::setJointAnglesDeg(float J1_, float J2_, float J3_, float J4_, float J5_) {
-    setJointAngles(
-        servoICS::fromDeg_toIcs(J1_),
-        servoICS::fromDeg_toIcs(J2_),
-        servoICS::fromDeg_toIcs(J3_),
-        servoICS::fromDeg_toIcs(J4_),
-        servoICS::fromDeg_toIcs(J5_)
-    );
-}
-
-void FootController::setJointAnglesRad(float J1_, float J2_, float J3_, float J4_, float J5_) {
-    setJointAngles(
-        servoICS::fromRad_toIcs(J1_),
-        servoICS::fromRad_toIcs(J2_),
-        servoICS::fromRad_toIcs(J3_),
-        servoICS::fromRad_toIcs(J4_),
-        servoICS::fromRad_toIcs(J5_)
-    );
 }
 
 bool FootController::computeJointPos(const Pose& targetPose, float kick, int mode, long out[5]) {
@@ -182,30 +148,6 @@ void FootController::setTargetPose(const Pose& targetPose, float kick, int mode)
     // 到達不可の場合は送信せず、直前の指令を保持する（NaN指令の防止）。
     if (!computeJointPos(targetPose, kick, mode, pos)) return;
     setJointAngles(pos[0], pos[1], pos[2], pos[3], pos[4]);
-}
-
-void FootController::setJointStretch(unsigned char stretch) {
-    servoJ1->setStretch(stretch);
-    servoJ2->setStretch(stretch);
-    servoJ3->setStretch(stretch);
-    servoJ4->setStretch(stretch);
-    servoJ5->setStretch(stretch);
-}
-
-void FootController::setJointSkip(bool skip) {
-    servoJ1->setSkip(skip);
-    servoJ2->setSkip(skip);
-    servoJ3->setSkip(skip);
-    servoJ4->setSkip(skip);
-    servoJ5->setSkip(skip);
-}
-
-void FootController::DemoPos() {
-    Serial.printf("J1:%d \n", servoJ1->setPos(0).getPos().value);
-    Serial.printf("J2:%d \n", servoJ2->setPos(0).getPos().value);
-    Serial.printf("J3:%d \n", servoJ3->setPos(0).getPos().value);
-    Serial.printf("J4:%d \n", servoJ4->setPos(0).getPos().value);
-    Serial.printf("J5:%d \n", servoJ5->setPos(0).getPos().value);
 }
 
 float FootController::calcAngle(float LengA, float LengB, float LengC) {

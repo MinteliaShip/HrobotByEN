@@ -1,141 +1,76 @@
 #include "Motion.h"
+#include "servoICS.h"
+#include "RobotController.h"
 #include <cmath>
 
-extern volatile bool deviceConnected;
-extern void sendBLE(uint8_t* data, size_t length);
+// ==============================================================
+// 角度の単位について（設計方針）
+//  モーションデータ・プロトコル・UIはすべて「論理値」（= setPos(x, true) に渡す値。
+//  7500 / 0deg = 校正済みの中立）で扱う。生ICSへの変換（オフセット加算）はservoICSの中だけ。
+//  旧データ（オフセット無しの生値で記録）は calib::legacyRawToLogicalIcs() で変換して使う。
+// ==============================================================
 
 // ==============================================================
-// 教示モード（TX / 同期モード）
-//  - BLE callbackは「最新値優先のメールボックス」へ置くだけ（サーボUARTには触れない）。
-//  - 実処理は TeachingMode::motionLoop() が main loop から毎周期呼ばれて行う。
-//  - 軸指令(0x01)は未処理分をマージ（軸ごとに最新値）。座標指令(0x40)は脚ごとに最新値。
+// 中断されたモーションの「関数内static状態」を初期化する仕組み
+//  motionForceStopAll() で g_motionEpoch を進めると、各 static 変数の直後に置いた
+//  MOTION_STATIC_RESET が、そのモーションの次回実行時に初期値へ戻す。
+//  （旧実装では、TX開始や再生で中断したモーションが次回フェーズの途中から再開していた）
 // ==============================================================
-volatile bool g_teachCmdPending = false;   // 未処理の軸/座標指令がある（main.cpp互換）
-volatile bool g_teachModeActive = false;
-static portMUX_TYPE g_teachCmdMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t g_motionEpoch = 1;
+template <typename T, typename U> static inline void motionResetValue(T& v, const U& init) { v = static_cast<T>(init); }
+#define MOTION_STATIC_RESET(var, init) \
+    do { static uint32_t _motionEp = 0; if (_motionEp != g_motionEpoch) { _motionEp = g_motionEpoch; motionResetValue(var, init); } } while (0)
+
+void motionForceStopAll() {
+    for (int i = 0; i < motionList::motionArrNum; ++i) {
+        motionList::motionArr[i]->isActive = false;
+        motionList::motionArr[i]->onForceStop();
+    }
+    g_motionEpoch = g_motionEpoch + 1;
+}
 
 namespace {
-constexpr uint32_t TEACH_ALL_MASK = (1UL << 19) - 1UL;
+constexpr int FOOT_BASE[2] = {9, 14};
+constexpr uint32_t FOOT_MASK[2] = {0x3E00UL, 0x7C000UL};   // bit9..13 / bit14..18
+constexpr uint32_t ALL_AXIS_MASK = (1UL << 19) - 1UL;
 
-struct TeachAxisCmd {
-    uint32_t cmdMask;
-    uint32_t fbMask;
-    uint16_t ics[19];
-};
-struct TeachPoseCmd {
-    float v[6];     // X, Y, Z, Roll[rad], Pitch[rad], Yaw[rad]
-    uint8_t mode;   // IK解の選択(0/1)
-};
-
-TeachAxisCmd g_axisPending = {};
-bool g_axisPendingValid = false;
-TeachPoseCmd g_posePending[2] = {};
-bool g_posePendingValid[2] = {false, false};
-bool g_poseNeutralReq[2] = {false, false};
-bool g_teachNeedReset = true;
+inline uint16_t rdU16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
+inline int16_t rdI16(const uint8_t* p) { return static_cast<int16_t>(rdU16(p)); }
+inline uint32_t rdU24(const uint8_t* p) {
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16);
 }
 
-bool queueTeachingCommand(const uint8_t* data, size_t length) {
-    if (data == nullptr || length != 45 || data[0] != 0x01) return false;
-    const uint32_t cmd = (static_cast<uint32_t>(data[1]) | (static_cast<uint32_t>(data[2]) << 8) |
-                          (static_cast<uint32_t>(data[3]) << 16)) & TEACH_ALL_MASK;
-    const uint32_t fb = (static_cast<uint32_t>(data[4]) | (static_cast<uint32_t>(data[5]) << 8) |
-                         (static_cast<uint32_t>(data[6]) << 16)) & TEACH_ALL_MASK;
+// 論理値が、その軸のオフセットを足した後に ICS の範囲内か
+bool logicalInRange(int i, long v) {
+    if (v == 0) return true;
+    if (i < 0 || i >= 19 || ServoArray[i] == nullptr) return false;
+    const long raw = ServoArray[i]->toRawIcs(v);
+    return raw >= servoICS::ICS_LOW && raw <= servoICS::ICS_HIGH;
+}
 
-    bool accepted = false;
-    portENTER_CRITICAL(&g_teachCmdMux);
-    // TX(同期)モードでない時は受け付けない。RXへ戻した後に遅れて届いたフレームで
-    // 勝手にTXへ戻ってしまう不具合の修正。
-    if (g_teachModeActive) {
-        if (!g_axisPendingValid) {
-            g_axisPending.cmdMask = 0;
-            g_axisPendingValid = true;
-        }
-        for (int i = 0; i < 19; ++i) {
-            if (cmd & (1UL << i)) {
-                g_axisPending.ics[i] = static_cast<uint16_t>(data[7 + i * 2]) |
-                                       (static_cast<uint16_t>(data[8 + i * 2]) << 8);
-            }
-        }
-        g_axisPending.cmdMask |= cmd;   // 未処理の軸指令は失わずマージする
-        g_axisPending.fbMask = fb;      // フィードバック要求は最新値
-        g_teachCmdPending = true;
-        accepted = true;
+// 今の指令値（論理）。目標が登録されていればそれ、無ければ最後に送った値。0=FREE/不明
+long currentLogical(int i) {
+    servoICS::Servo* s = ServoArray[i];
+    if (s == nullptr) return 0;
+    if (s->hasTarget()) return s->toLogicalIcs(s->targetRaw());
+    if (s->hasSetPos()) return s->getLastSetPosLogicalIcs();
+    return 0;
+}
+
+// 軸ごとのストレッチ（保持力）。足首5(13/18)は setup() と同じ柔らかい値を維持する。
+// 旧実装: setup()で足首を10にしても、nop(4秒毎)や歩行開始で全軸 stretch(120) に戻していた。
+unsigned char axisStretch(int i) { return (i == 13 || i == 18) ? 10 : stretch; }
+
+// 脚の座標 → 関節(論理)。FootController::setTargetPose() と同じ変換。
+bool footIk(int f, const FootController::Pose& pose, uint8_t ik, long out[5]) {
+    FootController& foot = (f == 0) ? leftFoot : rightFoot;
+    if (!foot.computeJointPos(pose, 0.0f, ik, out)) return false;
+    for (int k = 0; k < 5; ++k) {
+        if (!logicalInRange(FOOT_BASE[f] + k, out[k])) return false;
     }
-    portEXIT_CRITICAL(&g_teachCmdMux);
-    return accepted;
+    return true;
 }
-
-// 座標指令: [0x40][foot:0=左,1=右][mode][X,Y,Z,Roll,Pitch,Yaw : float32 LE x6] = 27B
-bool queueTeachingPose(const uint8_t* data, size_t length) {
-    if (data == nullptr || length != 27 || data[0] != 0x40) return false;
-    const uint8_t foot = data[1];
-    if (foot > 1) return false;
-    TeachPoseCmd cmd;
-    cmd.mode = data[2] ? 1 : 0;
-    memcpy(cmd.v, data + 3, sizeof(cmd.v));
-    for (int i = 0; i < 6; ++i) {
-        if (!std::isfinite(cmd.v[i])) return false;
-    }
-    for (int i = 0; i < 3; ++i) {
-        if (fabsf(cmd.v[i]) > 400.0f) return false;      // [mm]
-    }
-    if (fabsf(cmd.v[3]) > 1.6f || fabsf(cmd.v[5]) > 1.6f) return false; // [rad]
-    cmd.v[4] = 0.0f; // Pitchは現行IKでは未使用
-
-    bool accepted = false;
-    portENTER_CRITICAL(&g_teachCmdMux);
-    if (g_teachModeActive) {
-        g_posePending[foot] = cmd;
-        g_posePendingValid[foot] = true;
-        g_teachCmdPending = true;
-        accepted = true;
-    }
-    portEXIT_CRITICAL(&g_teachCmdMux);
-    return accepted;
-}
-
-// ニュートラル座標要求: [0x41][foot]。適用後に [0x37][foot][6 floats] で適用座標を返す。
-bool queueTeachingNeutral(uint8_t foot) {
-    if (foot > 1) return false;
-    bool accepted = false;
-    portENTER_CRITICAL(&g_teachCmdMux);
-    if (g_teachModeActive) {
-        g_poseNeutralReq[foot] = true;
-        g_teachCmdPending = true;
-        accepted = true;
-    }
-    portEXIT_CRITICAL(&g_teachCmdMux);
-    return accepted;
-}
-
-void teachingRequestReset() {
-    portENTER_CRITICAL(&g_teachCmdMux);
-    g_teachNeedReset = true;
-    portEXIT_CRITICAL(&g_teachCmdMux);
-}
-
-void startTeachingMode() {
-    portENTER_CRITICAL(&g_teachCmdMux);
-    g_teachModeActive = true;
-    g_axisPendingValid = false;
-    g_posePendingValid[0] = g_posePendingValid[1] = false;
-    g_poseNeutralReq[0] = g_poseNeutralReq[1] = false;
-    g_teachCmdPending = false;
-    g_teachNeedReset = true;
-    portEXIT_CRITICAL(&g_teachCmdMux);
-}
-
-void stopTeachingMode() {
-    portENTER_CRITICAL(&g_teachCmdMux);
-    g_teachModeActive = false;
-    g_axisPendingValid = false;
-    g_posePendingValid[0] = g_posePendingValid[1] = false;
-    g_poseNeutralReq[0] = g_poseNeutralReq[1] = false;
-    g_teachCmdPending = false;
-    g_teachNeedReset = true;
-    portEXIT_CRITICAL(&g_teachCmdMux);
-}
+} // namespace
 
 // サーボID(0〜18)に対応する部位ビットのルックアップテーブル
 static const BusyPartsBit SERVO_PART_MAP[19] = {
@@ -148,8 +83,9 @@ static const BusyPartsBit SERVO_PART_MAP[19] = {
 
 /// PROGMEM上のモーション配列を逐次再生する共通関数
 /// @return true: 再生中, false: モーション終了
-bool playCodeMotion(const int16_t motionData[][19], uint16_t totalFrames, char motionArrUsingBit, int &taskPhase, uint16_t &currentFrame) {
+bool playCodeMotion(const int16_t motionData[][19], uint16_t totalFrames, bool logical, char motionArrUsingBit, int &taskPhase, uint16_t &currentFrame) {
     static uint32_t lastFrameMs = 0;
+    MOTION_STATIC_RESET(lastFrameMs, 0);
 
     switch (taskPhase) {
         case 0: // 初期化フェーズ
@@ -202,7 +138,9 @@ bool playCodeMotion(const int16_t motionData[][19], uint16_t totalFrames, char m
                 // 2. モーションデータ側が -1 (無視) でないこと
                 if ((myAuthorityMask & (1UL << i)) && currentPos[i] >= 0) {
                     if (ServoArray[i] != nullptr) {
-                        ServoArray[i]->setPosIcs(static_cast<uint16_t>(currentPos[i]), false);
+                        // ExportData.h の値は論理ICS（そのまま）。MotionData.h の値は旧来の「生ICS」(オフセット無し)なので旧オフセットで論理値に変換する。
+                        const long v = logical ? currentPos[i] : calib::legacyRawToLogicalIcs(i, currentPos[i]);
+                        ServoArray[i]->setPosIcs(v, true);
                     }
                 }
             }
@@ -220,357 +158,297 @@ bool playCodeMotion(const int16_t motionData[][19], uint16_t totalFrames, char m
     return true; // 再生継続中
 }
 // ==============================================================
-// BLE事前転送モーション。1フレーム41byte: duration(uint16 LE), mode(uint8), ICS[19](int16 LE)
-// mode 0=なめらか / 1=イチギメ。角度 -1=無視、0=FREE、それ以外=ICS指令。
+// 事前転送モーション（形式v2: 関節キーフレーム + 座標キーフレーム）
+//  - BEGIN/DATA は BLE callback でRAMへコピーするだけ。
+//  - COMMIT（全フレーム検証・IK到達確認）は loop 側。START はRAMのバッファをそのまま再生する。
+//  - これは「検証・プレビュー用」で、保持できるのは1件だけ。フラッシュには書かない（電源を切ると消える）。
+//    変更がなければPCは転送を省略して START だけ送れば、同じ内容を何度でも再生できる。
+//  - 本番用のモーションは PCアプリが ExportData.h にエクスポートし、DECLARE_DATA_MOTION で組み込む（playCodeMotion で再生）。
+//  - 座標指定の脚は、前のフレームも座標なら「足先の直線補間 + 毎周期IK」、
+//    そうでなければ「目標をIKで関節にしてから関節補間」で再生する。
 // ==============================================================
-static constexpr uint8_t UPLOAD_BEGIN = 0x30;
-static constexpr uint8_t UPLOAD_DATA = 0x31;
-static constexpr uint8_t UPLOAD_COMMIT = 0x32;
-static constexpr uint8_t UPLOAD_START = 0x33;
-static constexpr uint8_t UPLOAD_EMERGENCY_STOP = 0x34;
-static constexpr size_t UPLOAD_FRAME_BYTES = 41;
-static constexpr uint16_t UPLOAD_MAX_FRAMES = 100;
-static constexpr size_t UPLOAD_MAX_BYTES = UPLOAD_FRAME_BYTES * UPLOAD_MAX_FRAMES;
-static constexpr char UPLOAD_MOTION_PATH[] = "/uploaded_motion.bin";
-static constexpr uint32_t ALL_SERVO_MASK = (1UL << 19) - 1UL;
+namespace {
+using namespace proto;
+constexpr size_t UP_MAX_BYTES = static_cast<size_t>(FRAME_BYTES) * MAX_FRAMES;
+uint32_t g_upHash = 0;   // COMMIT時点の内容のFNV-1a。START時に再計算して、RAM上のデータが壊れていないか確認する
 
-static uint8_t g_uploadedMotionBytes[UPLOAD_MAX_BYTES];
-static uint16_t g_uploadedFrameCount = 0;
-static size_t g_uploadedExpectedBytes = 0;
-static size_t g_uploadedReceivedBytes = 0;
-static volatile bool g_uploadedMotionReady = false;
-static volatile bool g_uploadedMotionActive = false;
-static volatile bool g_uploadedEmergencyPending = false;
-static volatile bool g_uploadedEmergencyLatched = false;
-static volatile uint32_t g_uploadedEmergencyServoMask = ALL_SERVO_MASK;
-static volatile uint32_t g_uploadedMotionGeneration = 0;
-static portMUX_TYPE g_uploadedMotionMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t g_upBuf[UP_MAX_BYTES];
+uint16_t g_upFrames = 0;
+size_t g_upExpected = 0;
+size_t g_upReceived = 0;
+volatile bool g_upReady = false;
+volatile bool g_playing = false;
+portMUX_TYPE g_upMux = portMUX_INITIALIZER_UNLOCKED;
 
-bool handleUploadedMotionCommand(const uint8_t* data, size_t length) {
-    if (data == nullptr || length == 0) return false;
-    const uint8_t command = data[0];
+struct KeyFrame {
+    uint16_t dur;
+    uint8_t flags;
+    int16_t joint[19];
+    int16_t pose[2][5];   // X,Y,Z[0.1mm], Roll,Yaw[0.01deg]
+};
 
-    if (command == UPLOAD_BEGIN) {
-        if (length != 3) return false;
-        const uint16_t count = static_cast<uint16_t>(data[1]) |
-                               (static_cast<uint16_t>(data[2]) << 8);
-        if (count == 0 || count > UPLOAD_MAX_FRAMES) return false;
-        bool accepted = false;
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        if (!g_uploadedMotionActive && !g_uploadedEmergencyPending) {
-            g_uploadedFrameCount = count;
-            g_uploadedExpectedBytes = static_cast<size_t>(count) * UPLOAD_FRAME_BYTES;
-            g_uploadedReceivedBytes = 0;
-            g_uploadedMotionReady = false;
-            accepted = true;
-        }
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        return accepted;
-    }
+void decodeFrame(const uint8_t* b, KeyFrame& k) {
+    k.dur = rdU16(b);
+    k.flags = b[2];
+    for (int i = 0; i < 19; ++i) k.joint[i] = rdI16(b + 3 + i * 2);
+    for (int f = 0; f < 2; ++f)
+        for (int j = 0; j < 5; ++j) k.pose[f][j] = rdI16(b + 41 + f * 10 + j * 2);
+}
 
-    if (command == UPLOAD_DATA) {
-        if (length < 4 || length > 20) return false;
-        const size_t offset = static_cast<size_t>(data[1]) |
-                              (static_cast<size_t>(data[2]) << 8);
-        const size_t count = length - 3;
-        bool accepted = false;
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        if (!g_uploadedMotionActive && !g_uploadedMotionReady &&
-            g_uploadedExpectedBytes > 0 && offset == g_uploadedReceivedBytes &&
-            offset + count <= g_uploadedExpectedBytes) {
-            memcpy(g_uploadedMotionBytes + offset, data + 3, count);
-            g_uploadedReceivedBytes += count;
-            accepted = true;
-        }
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        return accepted;
-    }
+inline bool framePose(const KeyFrame& k, int f) { return k.flags & (f == 0 ? KF_POSE_L : KF_POSE_R); }
+inline uint8_t frameIk(const KeyFrame& k, int f) { return (k.flags & (f == 0 ? KF_IK_L : KF_IK_R)) ? 1 : 0; }
 
-    if (command == UPLOAD_COMMIT) {
-        if (length != 1) return false;
-        bool complete = false;
-        uint16_t framesToValidate = 0;
-        size_t expectedBytesSnapshot = 0;
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        complete = !g_uploadedMotionActive && !g_uploadedEmergencyPending &&
-                   g_uploadedExpectedBytes > 0 &&
-                   g_uploadedReceivedBytes == g_uploadedExpectedBytes;
-        if (complete) {
-            framesToValidate = g_uploadedFrameCount;
-            expectedBytesSnapshot = g_uploadedExpectedBytes;
-        }
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        if (!complete) return false;
+void poseFromFrame(const int16_t q[5], float v[5]) {
+    v[0] = q[0] * 0.1f; v[1] = q[1] * 0.1f; v[2] = q[2] * 0.1f;
+    v[3] = q[3] * 0.01f; v[4] = q[4] * 0.01f;
+}
+FootController::Pose poseFromVals(const float v[5]) {
+    return FootController::Pose{v[0], v[1], v[2], v[3] * static_cast<float>(DEG_TO_RAD), 0.0f, v[4] * static_cast<float>(DEG_TO_RAD)};
+}
 
-        // COMMIT時に全フレームを検証し、不正値をサーボへ渡さない。
-        bool valid = true;
-        for (uint16_t f = 0; f < framesToValidate && valid; ++f) {
-            const size_t base = static_cast<size_t>(f) * UPLOAD_FRAME_BYTES;
-            const uint16_t duration = static_cast<uint16_t>(g_uploadedMotionBytes[base]) |
-                (static_cast<uint16_t>(g_uploadedMotionBytes[base + 1]) << 8);
-            const uint8_t mode = g_uploadedMotionBytes[base + 2];
-            if (duration < 20 || mode > 1) {
-                valid = false;
-                break;
-            }
-            for (int i = 0; i < 19; ++i) {
-                const size_t offset = base + 3 + static_cast<size_t>(i) * 2;
-                const int16_t target = static_cast<int16_t>(
-                    static_cast<uint16_t>(g_uploadedMotionBytes[offset]) |
-                    (static_cast<uint16_t>(g_uploadedMotionBytes[offset + 1]) << 8));
-                if (target < -1 || (target > 0 && target < 3500) || target > 11500) {
-                    valid = false;
-                    break;
-                }
-            }
-        }
+// 再生状態（v3: 部位トラックごとに独立して進む）
+//  トラック = 腰 / 左腕 / 右腕 / 左脚 / 右脚。各トラックは「自分の軸に値(-1以外)がある
+//  フレーム」だけを順に再生する。全軸に値のあるフレームなら全トラックが同時に進むので、
+//  従来の全身キーフレームと同じ動きになる。
+constexpr int TRACKS = 5;
+constexpr int8_t TRACK_FIRST[TRACKS] = {0, 1, 5, 9, 14};
+constexpr int8_t TRACK_LEN[TRACKS] = {1, 4, 4, 5, 5};
+constexpr int8_t TRACK_FOOT[TRACKS] = {-1, -1, -1, 0, 1};
+struct TrackState {
+    int16_t frame = -1;       // 再生中のフレーム番号（-1 = このトラックは終了）
+    bool init = false;
+    uint32_t startMs = 0;
+    uint16_t dur = 20;
+    bool snap = false;
+    long start[5];
+    long target[5];           // 論理, -1=触らない, 0=FREE
+    bool cart = false;
+    float from[5], to[5];
+    uint8_t ik = 0;
+    bool lastPoseValid = false;
+    float lastPose[5];
+};
+TrackState g_tr[TRACKS];
 
-        // COMMIT前に不正値を検査し、検証済みデータをLittleFSへ永続化する。
-        // このハンドラはBLE受信コールバックから呼ばれるため、ここではサーボUARTへ触れない。
-        bool saved = false;
-        if (valid) {
-            File out = LittleFS.open(UPLOAD_MOTION_PATH, "w");
-            if (out) {
-                const size_t written = out.write(g_uploadedMotionBytes, expectedBytesSnapshot);
-                out.close();
-                saved = (written == expectedBytesSnapshot);
-            }
-        }
-
-        bool accepted = false;
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        if (!g_uploadedMotionActive && !g_uploadedEmergencyPending &&
-            g_uploadedExpectedBytes == expectedBytesSnapshot &&
-            g_uploadedFrameCount == framesToValidate &&
-            g_uploadedExpectedBytes > 0 &&
-            g_uploadedReceivedBytes == g_uploadedExpectedBytes) {
-            if (valid && saved) {
-                g_uploadedMotionReady = true;
-                accepted = true;
-            } else {
-                g_uploadedMotionReady = false;
-                g_uploadedExpectedBytes = 0;
-                g_uploadedReceivedBytes = 0;
-                g_uploadedFrameCount = 0;
-            }
-        }
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        if (valid && !saved) {
-            Serial.println("[MOTION] LittleFS save failed; playback was not armed.");
-        }
-        return accepted;
-    }
-
-    if (command == UPLOAD_START) {
-        if (length != 1) return false;
-        size_t expectedBytes = 0;
-        uint16_t expectedFrames = 0;
-        bool canStart = false;
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        canStart = g_uploadedMotionReady && !g_uploadedMotionActive &&
-                   !g_uploadedEmergencyPending && g_uploadedFrameCount > 0 &&
-                   g_uploadedReceivedBytes == g_uploadedExpectedBytes;
-        expectedBytes = g_uploadedExpectedBytes;
-        expectedFrames = g_uploadedFrameCount;
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        if (!canStart || expectedBytes == 0 || expectedBytes > UPLOAD_MAX_BYTES) return false;
-
-        // 実行データをファイルシステムから読み直す。RAM上の転送バッファをそのまま
-        // 再生するのではなく、保存に成功したファイルが完全であることを確認して開始する。
-        File in = LittleFS.open(UPLOAD_MOTION_PATH, "r");
-        if (!in || in.size() != expectedBytes) {
-            if (in) in.close();
-            return false;
-        }
-        const size_t readBytes = in.read(g_uploadedMotionBytes, expectedBytes);
-        in.close();
-        if (readBytes != expectedBytes) return false;
-
-        bool accepted = false;
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        if (g_uploadedMotionReady && !g_uploadedMotionActive &&
-            !g_uploadedEmergencyPending && g_uploadedFrameCount == expectedFrames &&
-            g_uploadedExpectedBytes == expectedBytes &&
-            g_uploadedReceivedBytes == expectedBytes) {
-            g_uploadedEmergencyLatched = false;
-            g_uploadedEmergencyPending = false;
-            g_uploadedMotionReady = false;
-            g_uploadedMotionActive = true;
-            ++g_uploadedMotionGeneration;
-            accepted = true;
-        }
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        if (accepted) {
-            teachingRequestReset(); // 再生でサーボ位置が変わるため、教示側の目標値を破棄
-            Serial.printf("[MOTION] Loaded %u frames from LittleFS and started playback.\n", expectedFrames);
-        }
-        return accepted;
-    }
-
-    if (command == UPLOAD_EMERGENCY_STOP) {
-        // 新形式は [0x34][ServoMask:3B]。旧形式1byteは全軸FREEとして互換維持。
-        if (length != 1 && length != 4) return false;
-        uint32_t servoMask = ALL_SERVO_MASK;
-        if (length == 4) {
-            servoMask = static_cast<uint32_t>(data[1]) |
-                        (static_cast<uint32_t>(data[2]) << 8) |
-                        (static_cast<uint32_t>(data[3]) << 16);
-            servoMask &= ALL_SERVO_MASK;
-        }
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        g_uploadedEmergencyServoMask = servoMask;
-        g_uploadedEmergencyPending = true;
-        g_uploadedMotionReady = false;
-        g_uploadedExpectedBytes = 0;
-        g_uploadedReceivedBytes = 0;
-        g_uploadedFrameCount = 0;
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        return true;
-    }
+bool trackUses(const KeyFrame& k, int t) {
+    if (TRACK_FOOT[t] >= 0 && framePose(k, TRACK_FOOT[t])) return true;
+    for (int j = 0; j < TRACK_LEN[t]; ++j) if (k.joint[TRACK_FIRST[t] + j] != -1) return true;
     return false;
 }
 
-bool uploadedMotionOwnsRobot() {
-    portENTER_CRITICAL(&g_uploadedMotionMux);
-    const bool result = g_uploadedMotionActive || g_uploadedEmergencyPending;
-    portEXIT_CRITICAL(&g_uploadedMotionMux);
-    return result;
+int16_t trackNextFrame(int t, int from) {
+    for (int fr = from; fr < g_upFrames; ++fr) {
+        KeyFrame k;
+        decodeFrame(g_upBuf + static_cast<size_t>(fr) * FRAME_BYTES, k);
+        if (trackUses(k, t)) return static_cast<int16_t>(fr);
+    }
+    return -1;
 }
 
-bool uploadedMotionEmergencyLatched() {
-    portENTER_CRITICAL(&g_uploadedMotionMux);
-    const bool result = g_uploadedEmergencyLatched;
-    portEXIT_CRITICAL(&g_uploadedMotionMux);
-    return result;
+uint32_t fnv1a32(const uint8_t* p, size_t n) {
+    uint32_t h = 2166136261UL;
+    for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 16777619UL; }
+    return h;
 }
 
-static void freeServosForEmergency(uint32_t servoMask) {
-    for (int i = 0; i < 19; ++i) {
-        if ((servoMask & (1UL << i)) == 0) continue;
-        if (ServoArray[i] != nullptr) ServoArray[i]->setPosFree();
+// 全フレームを検証（範囲外の関節値・IK到達不可の座標を弾く）。不正なフレーム番号を返す（全て正常なら -1）
+int validateFrames(uint16_t frames) {
+    for (uint16_t fr = 0; fr < frames; ++fr) {
+        KeyFrame k;
+        decodeFrame(g_upBuf + static_cast<size_t>(fr) * FRAME_BYTES, k);
+        bool ok = k.dur >= 20 && (k.flags & ~0x1F) == 0;
+        for (int i = 0; ok && i < 19; ++i) {
+            const int f = (i >= 14) ? 1 : (i >= 9 ? 0 : -1);
+            if (f >= 0 && framePose(k, f)) continue;   // 座標指定の脚の関節値は使わない
+            const int16_t v = k.joint[i];
+            if (v == -1 || v == 0 || v == -2) continue;     // -2 = 空白（そのトラックは保持）
+            if (v < -2 || !logicalInRange(i, v)) ok = false;
+        }
+        for (int f = 0; ok && f < 2; ++f) {
+            if (!framePose(k, f)) continue;
+            float pv[5];
+            poseFromFrame(k.pose[f], pv);
+            long out[5];
+            if (!footIk(f, poseFromVals(pv), frameIk(k, f), out)) ok = false;
+        }
+        if (!ok) return fr;
     }
+    return -1;
 }
 
-static void sendUploadedMotionEvent(uint8_t status) {
-    // 0x36: [status] 0=完了 / 1=緊急停止 / 2=BLE切断停止
-    uint8_t eventPacket[2] = {0x36, status};
-    sendBLE(eventPacket, sizeof(eventPacket));
+void resetUploadLocked() {
+    g_upFrames = 0;
+    g_upExpected = 0;
+    g_upReceived = 0;
+    g_upReady = false;
+}
+} // namespace
+
+uint8_t uploadBegin(uint16_t frames) {
+    if (frames == 0 || frames > MAX_FRAMES) return ST_INVALID;
+    uint8_t st = ST_OK;
+    portENTER_CRITICAL(&g_upMux);
+    if (g_playing) {
+        st = ST_BUSY;
+    } else {
+        g_upFrames = frames;
+        g_upExpected = static_cast<size_t>(frames) * FRAME_BYTES;
+        g_upReceived = 0;
+        g_upReady = false;
+    }
+    portEXIT_CRITICAL(&g_upMux);
+    return st;
 }
 
-void processUploadedMotion() {
-    bool emergency = false;
-    bool active = false;
-    uint32_t generation = 0;
-    uint32_t emergencyServoMask = ALL_SERVO_MASK;
-    uint16_t frameCount = 0;
-    portENTER_CRITICAL(&g_uploadedMotionMux);
-    if (g_uploadedEmergencyPending) {
-        g_uploadedEmergencyPending = false;
-        g_uploadedMotionActive = false;
-        g_uploadedEmergencyLatched = true;
-        emergencyServoMask = g_uploadedEmergencyServoMask;
-        emergency = true;
+uint8_t uploadData(uint16_t offset, const uint8_t* d, size_t n) {
+    uint8_t st = ST_REJECTED;
+    portENTER_CRITICAL(&g_upMux);
+    if (!g_playing && !g_upReady && g_upExpected > 0 && n > 0) {
+        if (offset == g_upReceived && offset + n <= g_upExpected) {
+            memcpy(g_upBuf + offset, d, n);
+            g_upReceived += n;
+            st = ST_OK;
+        } else if (offset + n == g_upReceived) {
+            st = ST_OK;   // ACKが失われてPCが再送した分（受信済み）
+        }
     }
-    active = g_uploadedMotionActive;
-    generation = g_uploadedMotionGeneration;
-    frameCount = g_uploadedFrameCount;
-    portEXIT_CRITICAL(&g_uploadedMotionMux);
+    portEXIT_CRITICAL(&g_upMux);
+    return st;
+}
 
-    if (emergency) {
-        stopTeachingMode();
-        freeServosForEmergency(emergencyServoMask);
-        Serial.println("[MOTION] EMERGENCY STOP: playback aborted; selected enabled servos freed.");
-        sendUploadedMotionEvent(1);
-        return;
-    }
-    if (!active) return;
+bool uploadReady() { return g_upReady; }
 
-    if (!deviceConnected) {
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        g_uploadedMotionActive = false;
-        g_uploadedEmergencyLatched = true;
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
-        stopTeachingMode();
-        freeServosForEmergency(ALL_SERVO_MASK);
-        Serial.println("[MOTION] BLE disconnected during playback: stopped and freed all servos.");
-        sendUploadedMotionEvent(2);
-        return;
+uint8_t uploadCommit() {
+    portENTER_CRITICAL(&g_upMux);
+    const bool complete = !g_playing && g_upExpected > 0 && g_upReceived == g_upExpected;
+    const uint16_t frames = g_upFrames;
+    const size_t bytes = g_upExpected;
+    portEXIT_CRITICAL(&g_upMux);
+    if (!complete) return ST_BAD_STATE;
+
+    const int bad = validateFrames(frames);
+    if (bad >= 0) {
+        Serial.printf("[MOTION] Upload rejected: frame %d is invalid (range/IK).\n", bad);
+        portENTER_CRITICAL(&g_upMux);
+        resetUploadLocked();
+        portEXIT_CRITICAL(&g_upMux);
+        return ST_INVALID;
     }
 
-    static uint32_t localGeneration = 0;
-    static uint16_t frameIndex = 0;
-    static bool frameInitialized = false;
-    static uint32_t frameStartMs = 0;
-    static int32_t startIcs[19] = {0};
+    g_upHash = fnv1a32(g_upBuf, bytes);
+    g_upReady = true;
+    Serial.printf("[MOTION] Upload committed (RAM only): %u frames.\n", frames);
+    return ST_OK;
+}
 
-    if (localGeneration != generation) {
-        localGeneration = generation;
-        frameIndex = 0;
-        frameInitialized = false;
+// ACKのtokenに入れる、内容の16bitハッシュ（PCが送った内容と一致するか確認するため）
+uint16_t uploadHash16() { return static_cast<uint16_t>((g_upHash ^ (g_upHash >> 16)) & 0xFFFF); }
+
+uint8_t playbackStart() {
+    if (!g_upReady) return ST_BAD_STATE;
+    // RAM上のデータがCOMMIT時のまま壊れていないことを確認してから再生する
+    const uint16_t frames = g_upFrames;
+    const size_t bytes = static_cast<size_t>(frames) * FRAME_BYTES;
+    if (frames == 0 || frames > MAX_FRAMES || fnv1a32(g_upBuf, bytes) != g_upHash) return ST_IO_ERROR;
+    for (int t = 0; t < TRACKS; ++t) {
+        g_tr[t] = TrackState();
+        g_tr[t].frame = trackNextFrame(t, 0);
     }
-    if (frameIndex >= frameCount) {
-        portENTER_CRITICAL(&g_uploadedMotionMux);
-        g_uploadedMotionActive = false;
-        portEXIT_CRITICAL(&g_uploadedMotionMux);
+    g_playing = true;
+    Serial.printf("[MOTION] Playback started: %u frames.\n", frames);
+    return ST_OK;
+}
+
+void playbackAbort() {
+    g_playing = false;
+    for (int t = 0; t < TRACKS; ++t) g_tr[t].frame = -1;
+}
+
+bool playbackUpdate() {
+    if (!g_playing) return false;
+    bool any = false;
+    for (int t = 0; t < TRACKS; ++t) {
+        TrackState& s = g_tr[t];
+        if (s.frame < 0) continue;
+        any = true;
+        KeyFrame k;
+        decodeFrame(g_upBuf + static_cast<size_t>(s.frame) * FRAME_BYTES, k);
+        const int first = TRACK_FIRST[t];
+        const int len = TRACK_LEN[t];
+        const int f = TRACK_FOOT[t];
+        const bool pose = f >= 0 && framePose(k, f);
+
+        if (!s.init) {
+            s.startMs = millis();
+            s.dur = k.dur < 20 ? 20 : k.dur;
+            s.snap = k.flags & KF_SNAP;
+            s.cart = false;
+            for (int j = 0; j < len; ++j) {
+                s.target[j] = k.joint[first + j];   // -2(空白)は「動かさない」: 下の補間/FREE処理はどれも >0 / ==0 だけを扱う
+                s.start[j] = currentLogical(first + j);
+            }
+            if (pose) {
+                poseFromFrame(k.pose[f], s.to);
+                s.ik = frameIk(k, f);
+                if (s.lastPoseValid && !s.snap) {
+                    s.cart = true;                 // 足先を直線で動かす
+                    memcpy(s.from, s.lastPose, sizeof(s.from));
+                    for (int j = 0; j < len; ++j) s.target[j] = -1;
+                } else {
+                    long out[5];
+                    const bool ok = footIk(f, poseFromVals(s.to), s.ik, out);
+                    for (int j = 0; j < len; ++j) s.target[j] = ok ? out[j] : -1;
+                }
+            }
+            for (int j = 0; j < len; ++j) {
+                servoICS::Servo* sv = ServoArray[first + j];
+                if (sv == nullptr) continue;
+                if (s.target[j] == 0) sv->setPosFree();
+                else if (s.snap && s.target[j] > 0) sv->setPos(s.target[j], true);
+            }
+            s.init = true;
+        }
+
+        const uint32_t elapsed = millis() - s.startMs;
+        const float tt = (elapsed >= s.dur) ? 1.0f : static_cast<float>(elapsed) / static_cast<float>(s.dur);
+        const float e = tt * tt * (3.0f - 2.0f * tt);
+        if (!s.snap) {
+            for (int j = 0; j < len; ++j) {
+                const long tgt = s.target[j];
+                if (tgt <= 0 || ServoArray[first + j] == nullptr) continue;
+                const long st = s.start[j] > 0 ? s.start[j] : tgt;
+                ServoArray[first + j]->setPos(lroundf(st + (tgt - st) * e), true);
+            }
+        }
+        if (s.cart) {
+            float v[5];
+            for (int j = 0; j < 5; ++j) v[j] = s.from[j] + (s.to[j] - s.from[j]) * e;
+            long out[5];
+            if (footIk(f, poseFromVals(v), s.ik, out)) {
+                for (int j = 0; j < 5; ++j) ServoArray[first + j]->setPos(out[j], true);
+            }
+        }
+
+        if (elapsed >= s.dur) {
+            if (f >= 0) {
+                if (pose) {
+                    memcpy(s.lastPose, s.to, sizeof(s.lastPose));
+                    s.lastPoseValid = true;
+                } else {
+                    // 関節で動かしたら座標の連続性は切れる（-2の空白=保持なら連続のまま）
+                    for (int j = 0; j < len; ++j) if (k.joint[first + j] >= 0) s.lastPoseValid = false;
+                }
+            }
+            s.init = false;
+            s.frame = trackNextFrame(t, s.frame + 1);
+        }
+    }
+    if (!any) {
+        g_playing = false;
         Serial.println("[MOTION] Uploaded motion completed.");
-        frameInitialized = false;
-        sendUploadedMotionEvent(0);
-        return;
+        return false;
     }
-
-    const uint8_t* frame = g_uploadedMotionBytes + (static_cast<size_t>(frameIndex) * UPLOAD_FRAME_BYTES);
-    uint16_t duration = static_cast<uint16_t>(frame[0]) |
-                        (static_cast<uint16_t>(frame[1]) << 8);
-    if (duration < 20) duration = 20;
-    const bool snap = frame[2] == 1;
-
-    if (!frameInitialized) {
-        frameStartMs = millis();
-        for (int i = 0; i < 19; ++i) {
-            const size_t offset = 3 + (static_cast<size_t>(i) * 2);
-            const int16_t target = static_cast<int16_t>(static_cast<uint16_t>(frame[offset]) |
-                                     (static_cast<uint16_t>(frame[offset + 1]) << 8));
-            startIcs[i] = (ServoArray[i] != nullptr) ? ServoArray[i]->getLastSetPosIcs() : 0;
-            if (ServoArray[i] == nullptr || target == -1) continue;
-            if (target == 0) {
-                ServoArray[i]->setPosFree();
-            } else if (snap) {
-                ServoArray[i]->setPosIcs(static_cast<uint16_t>(target), false);
-            }
-        }
-        frameInitialized = true;
-    }
-
-    const uint32_t elapsed = millis() - frameStartMs;
-    const float t = (elapsed >= duration) ? 1.0f : (static_cast<float>(elapsed) / static_cast<float>(duration));
-    const float eased = t * t * (3.0f - 2.0f * t);
-    if (!snap) {
-        for (int i = 0; i < 19; ++i) {
-            if (ServoArray[i] == nullptr) continue;
-            const size_t offset = 3 + (static_cast<size_t>(i) * 2);
-            const int16_t target = static_cast<int16_t>(static_cast<uint16_t>(frame[offset]) |
-                                     (static_cast<uint16_t>(frame[offset + 1]) << 8));
-            if (target <= 0) continue; // -1=ignore, 0=FREE (frame entryで処理済み)
-            int32_t start = startIcs[i];
-            if (start <= 0 || start == 0xFFFF) start = target;
-            const int32_t pos = static_cast<int32_t>(start + ((static_cast<int32_t>(target) - start) * eased));
-            ServoArray[i]->setPosIcs(static_cast<uint16_t>(pos), false);
-        }
-    }
-
-    if (elapsed >= duration) {
-        if (!snap) {
-            for (int i = 0; i < 19; ++i) {
-                if (ServoArray[i] == nullptr) continue;
-                const size_t offset = 3 + (static_cast<size_t>(i) * 2);
-                const int16_t target = static_cast<int16_t>(static_cast<uint16_t>(frame[offset]) |
-                                         (static_cast<uint16_t>(frame[offset + 1]) << 8));
-                if (target > 0) ServoArray[i]->setPosIcs(static_cast<uint16_t>(target), false);
-            }
-        }
-        ++frameIndex;
-        frameInitialized = false;
-    }
+    return true;
 }
 
 bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,const float *armAngle_zero,const float *armAngle_tar1);
@@ -615,7 +493,9 @@ bool startWalking(GaitParameters &param_p){//静止状態から歩行状態へ�
 
     // 状態を維持する必要がある変数のみ static にする
     static int taskPhase = 0;
+    MOTION_STATIC_RESET(taskPhase, 0);
     static int frame = 0;
+    MOTION_STATIC_RESET(frame, 0);
 
     switch (taskPhase){
         case 0:
@@ -709,7 +589,9 @@ bool endWalking(GaitParameters &param_p) {//歩行状態から静止状態へ移
 
     // 状態を維持する必要がある変数のみ static にする
     static int taskPhase = 0;
+    MOTION_STATIC_RESET(taskPhase, 0);
     static int frame = 0;
+    MOTION_STATIC_RESET(frame, 0);
 
     switch (taskPhase) {
         case 0:
@@ -815,8 +697,7 @@ float calculateStepMotion(float start_angle, float target_angle, int current_ste
 bool motion_sub(int totalSteps,int index,int joint_num,int &currentStep,int &taskPhase,const float *armAngle_zero,const float *armAngle_tar1){
     for(int i=0;i<joint_num;i++){
         float currentPos = calculateStepMotion(armAngle_zero[i], armAngle_tar1[i], currentStep, totalSteps);
-        ServoArray[i+index]->setPosDeg(currentPos,false);
-        delay(2);
+        ServoArray[i+index]->setPosDeg(currentPos);   // 論理角（旧: 生角度 + delay(2)/軸）
     }
     if(currentStep < totalSteps){
         currentStep++;
@@ -911,14 +792,6 @@ namespace motion {
         return false;//現在未割り当て。
     }
 
-    bool ServoStateDeBug::canStart(){
-        return true;//常時起動
-    }
-
-    bool TeachingMode::canStart() {
-        // TeachingModeはtaskManagerから優先実行される。通常の排他制御経路向けの判定。
-        return false; // TeachingModeはtaskManagerから毎周期直接駆動する
-    }
 
 /**************************************************** */
 
@@ -949,14 +822,15 @@ namespace motion {
 
         // 状態を維持する必要がある変数のみ static にする
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int frame = 0;
+        MOTION_STATIC_RESET(frame, 0);
 
         switch (taskPhase){
             case 0:
             {
                 for(int i=0;i<19;i++){
-                    ServoArray[i]->setStretch(stretch);
-                    delay(5);
+                    ServoArray[i]->setStretch(axisStretch(i));
                 }
 
 
@@ -1082,14 +956,15 @@ namespace motion {
 
         // 状態を維持する必要がある変数のみ static にする
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int frame = 0;
+        MOTION_STATIC_RESET(frame, 0);
 
         switch (taskPhase){
             case 0:
             {
                 for(int i=0;i<19;i++){
-                    ServoArray[i]->setStretch(stretch);
-                    delay(5);
+                    ServoArray[i]->setStretch(axisStretch(i));
                 }
 
                 taskPhase = 1;
@@ -1215,10 +1090,13 @@ namespace motion {
 
             // 状態を維持する必要がある変数のみ static にする
             static int taskPhase = 0;
+            MOTION_STATIC_RESET(taskPhase, 0);
             static int frame = 0;
+            MOTION_STATIC_RESET(frame, 0);
 
             //左右に移動
             static float moveValue;
+            MOTION_STATIC_RESET(moveValue, 0);
 
             switch (taskPhase){
                 case 0:
@@ -1356,10 +1234,13 @@ namespace motion {
 
             // 状態を維持する必要がある変数のみ static にする
             static int taskPhase = 0;
+            MOTION_STATIC_RESET(taskPhase, 0);
             static int frame = 0;
+            MOTION_STATIC_RESET(frame, 0);
 
             //左右に移動
             static float moveValue;
+            MOTION_STATIC_RESET(moveValue, 0);
 
             switch (taskPhase){
                 case 0:
@@ -1506,15 +1387,16 @@ namespace motion {
 
             // 状態を維持する必要がある変数のみ static にする
             static int taskPhase = 0;
+            MOTION_STATIC_RESET(taskPhase, 0);
             static int frame = 0;
+            MOTION_STATIC_RESET(frame, 0);
 
             switch (taskPhase){
                 case 0:
                 {
                     Serial.print(F("turn \n"));
                     for(int i=0;i<19;i++){
-                        ServoArray[i]->setStretch(stretch);
-                        delay(5);
+                        ServoArray[i]->setStretch(axisStretch(i));
                     }
 
                     taskPhase = 1;
@@ -1602,19 +1484,22 @@ namespace motion {
             return true;//実行中は、trueを返す
         }else{
             static int taskDelay=0;
+            MOTION_STATIC_RESET(taskDelay, 0);
 
             static int taskPhase=0;
+
+            MOTION_STATIC_RESET(taskPhase, 0);
             switch (taskPhase)
             {
             case 0:
             {
                 FootController::Pose leftPose={
-                NeutralPoseY,-NeutralSpac*0.5,NeutralPoseX,
+                NeutralPoseY,-NeutralSpac*0.3,NeutralPoseX,
                 0, 0, 0
                 };
 
                 FootController::Pose rightPose={
-                NeutralPoseY,+NeutralSpac*0.5,NeutralPoseX,
+                NeutralPoseY,+NeutralSpac*0.3,NeutralPoseX,
                 0, 0, 0
                 };
 
@@ -1627,7 +1512,7 @@ namespace motion {
             case 1:
             {
                 taskDelay++;
-                if(taskDelay>(int)(G_fps*0.15)){//0.1秒間だけ固定
+                if(taskDelay>(int)(G_fps*0.2)){//0.1秒間だけ固定
                     taskPhase++;
                     taskDelay=0;
                 }
@@ -1638,12 +1523,12 @@ namespace motion {
                 taskDelay=0;
 
                 FootController::Pose leftPose={
-                NeutralPoseY+30,-NeutralSpac*0.5,NeutralPoseX,
+                NeutralPoseY+20,-NeutralSpac*0.3,NeutralPoseX,
                 0, 0, 0
                 };
 
                 FootController::Pose rightPose={
-                NeutralPoseY+30,+NeutralSpac*0.5,NeutralPoseX,
+                NeutralPoseY+20,+NeutralSpac*0.3,NeutralPoseX,
                 0, 0, 0
                 };
 
@@ -1651,7 +1536,7 @@ namespace motion {
                 leftFoot.setTargetPose(leftPose);
                 rightFoot.setTargetPose(rightPose);
                 
-                ServoArray[0]->setPosDeg(30);
+                ServoArray[0]->setPosDeg(15);
                 
                 taskPhase++;
                 break;
@@ -1669,12 +1554,12 @@ namespace motion {
             {
                 ServoArray[0]->setPosDeg(0);
                 FootController::Pose leftPose={
-                NeutralPoseY,-NeutralSpac*0.5,NeutralPoseX,
+                NeutralPoseY,-NeutralSpac*0.3,NeutralPoseX,
                 0, 0, 0
                 };
 
                 FootController::Pose rightPose={
-                NeutralPoseY,+NeutralSpac*0.5,NeutralPoseX,
+                NeutralPoseY,+NeutralSpac*0.3,NeutralPoseX,
                 0, 0, 0
                 };
 
@@ -1693,8 +1578,11 @@ namespace motion {
 
     bool sit_stand::motionLoop(){
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         switch (taskPhase) {
             case 0:
@@ -1754,8 +1642,11 @@ namespace motion {
 
     bool sitDown::motionLoop(){
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         // モーション構造体定義
         struct MotionStep {
@@ -1764,9 +1655,10 @@ namespace motion {
         };
 
         // PROGMEM配置（関数呼び出し間で保持するため static const を付与）
+        // 角度は論理角[deg]（オフセット差し引き後）。旧データ(生角度)は既定オフセットで変換済み。
         static const MotionStep motionData[] PROGMEM = {
-            /* 0: posZero   */ {60, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
-            /* 1:    */        {0,  {0.00,-6.55,86.67,-9.11,-67.10,0.30,78.43,1.11,-2.60,-1.15,-12.89,77.12,-94.80,-3.91,12.86,-1.92,73.81,82.45,7.56}},
+            /* 0: posZero   */ {60, {0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}},
+            /* 1:    */        {0,  {0.00,-6.55,86.67,-9.11,-67.10,0.30,78.43,1.11,-2.60,-1.15,-18.83,70.03,-104.15,-7.29,12.86,-4.45,80.59,89.23,0.13}},
         };
 
         const int arrNum = sizeof(motionData) / sizeof(motionData[0]);
@@ -1807,11 +1699,9 @@ namespace motion {
                 taskPhase = 0;
                 currentStep = 0;
                 arrIndex = 0;
-                for(int i = 0;i<10;i++){
-                    for(int i=0;i<19;i++){
-                        ServoArray[i]->setPosFree();
-                    delay(5);
-                }
+                // 全軸FREE（旧: 10回×19軸×delay(5) = 約1秒メインループ停止）
+                for(int i=0;i<19;i++){
+                    ServoArray[i]->setPosFree();
                 }
                 return false; // モーション完了
         }
@@ -1821,8 +1711,11 @@ namespace motion {
 
     bool standUp::motionLoop(){
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         // モーション構造体定義
         struct MotionStep {
@@ -1831,9 +1724,10 @@ namespace motion {
         };
 
         // PROGMEM配置（関数呼び出し間で保持するため static const を付与）
+        // 角度は論理角[deg]（オフセット差し引き後）。旧データ(生角度)は既定オフセットで変換済み。
         static const MotionStep motionData[] PROGMEM = {
-            /* 1:    */        {60,  {0.00,-6.55,86.67,-9.11,-67.10,0.30,78.43,1.11,-2.60,-1.15,-12.89,77.12,-94.80,-3.91,12.86,-1.92,73.81,82.45,7.56}},
-            /* 0: posZero   */ { 0,  {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
+            /* 1:    */        {60,  {0.00,-6.55,86.67,-9.11,-67.10,0.30,78.43,1.11,-2.60,-1.15,-18.83,70.03,-104.15,-7.29,12.86,-4.45,80.59,89.23,0.13}},
+            /* 0: posZero   */ { 0,  {0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}},
     };
 
         const int arrNum = sizeof(motionData) / sizeof(motionData[0]);
@@ -1882,8 +1776,11 @@ namespace motion {
 
     bool lowerPos::motionLoop(){
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         // モーション構造体定義
         struct MotionStep {
@@ -1893,17 +1790,17 @@ namespace motion {
 
         
         static const MotionStep motionData_1[] PROGMEM = {
-            /* 0: posZero   */ {20, {-0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
-            /* 2:           */ {10,  {-3.14 ,-22.92,26.73 ,-40.20 ,11.31 ,13.16 ,21.97 ,40.53 ,34.15 ,1.42 }},
-            /* 1:    */        {0,  {6.99 ,-26.26,29.02 ,-38.27 ,-23.56,20.99 ,24.23 ,29.97 ,32.03 ,28.79 }},
+            /* 0: posZero   */ {20, {-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}},
+            /* 2:           */ {10,  {-3.14,-28.86,19.64,-49.55,7.94,13.16,19.44,47.31,40.93,-6.01}},
+            /* 1:    */        {0,  {6.99,-32.20,21.93,-47.62,-26.93,20.99,21.70,36.75,38.81,21.36}},
         };
 
         const int arrNum_1 = sizeof(motionData_1) / sizeof(motionData_1[0]);
 
         static const MotionStep motionData_2[] PROGMEM = {
-            /* 1:    */        {20,  {6.99  ,-26.26,29.02 ,-38.27 ,-23.56,20.99 ,24.23 ,29.97 ,32.03 ,28.79 }},
-            /* 2:           */ {10,  {-3.14 ,-22.92,26.73 ,-40.20 ,11.31 ,13.16 ,21.97 ,40.53 ,34.15 ,1.42 }},
-            /* 0: posZero   */ {0,   { -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
+            /* 1:    */        {20,  {6.99,-32.20,21.93,-47.62,-26.93,20.99,21.70,36.75,38.81,21.36}},
+            /* 2:           */ {10,  {-3.14,-28.86,19.64,-49.55,7.94,13.16,19.44,47.31,40.93,-6.01}},
+            /* 0: posZero   */ {0,   {-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}},
         };
 
         const int arrNum_2 = sizeof(motionData_1) / sizeof(motionData_1[0]);
@@ -1985,6 +1882,7 @@ namespace motion {
     bool hip::motionLoop(){
         // 現在の角度を保持する静的変数
         static float current_angle = 0.0f;
+        MOTION_STATIC_RESET(current_angle, 0.0f);
         // スティック入力から目標角度を計算
         float target_angle = map_controller(Dualshock4.data.analog.stick.rx, 20, -128, 127, -45, 45);
         // 追従係数（0.0 〜 1.0）
@@ -2009,7 +1907,9 @@ namespace motion {
 
         // 状態を維持する必要がある変数のみ static にする
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep=0;
+        MOTION_STATIC_RESET(currentStep, 0);
 
         float armAngle_zero[4]={0,70,33,-130};//rightArmJ1~rightArmJ4 ServoArray[5]~ServoArray[8]
         float armAngle_tar[4]={-14,73,-55.8,-43.6};
@@ -2075,7 +1975,9 @@ namespace motion {
     bool attack_Light_left::motionLoop(){//弱攻撃
         // 状態を維持する必要がある変数のみ static にする
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep=0;
+        MOTION_STATIC_RESET(currentStep, 0);
 
         float armAngle_zero[4]={4,80,-16,-130};//leftArmJ1~leftArmJ4 ServoArray[1]~ServoArray[4]
         float armAngle_tar[4]={5,43,75,-14};
@@ -2121,7 +2023,9 @@ namespace motion {
 
         // 状態を維持する必要がある変数のみ static にする
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep=0;
+        MOTION_STATIC_RESET(currentStep, 0);
 
         float armAngle_zero[4]={4,80,-16,-130};//leftArmJ1~leftArmJ4 ServoArray[1]~ServoArray[4]
         float armAngle_tar1[4]={-13,41,-26,-71};
@@ -2203,8 +2107,11 @@ namespace motion {
 
     bool attack_Medium_right::motionLoop(){
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         const int joint_num = 4;
 
@@ -2215,6 +2122,7 @@ namespace motion {
         };
 
         // PROGMEM配置（関数呼び出し間で保持するため static const を付与）
+        // 角度は論理角[deg]（オフセット差し引き後）。旧データ(生角度)は既定オフセットで変換済み。
         static const MotionStep motionData[] PROGMEM = {
             /* 0: posZero   */ { 5,  {0,70,33,-130}},
             /* 1:    */        {10,  {57.71,36.18,-10.90,-0.30}},
@@ -2275,7 +2183,10 @@ namespace motion {
     bool getUp::motionLoop(){
 
         static int taskPhase;
+
+        MOTION_STATIC_RESET(taskPhase, 0);
         static bool getup_mode;
+        MOTION_STATIC_RESET(getup_mode, 0);
 
         switch (taskPhase){
             case 0:
@@ -2283,7 +2194,6 @@ namespace motion {
                 Serial.printf("getUp!\n");
                 for(int i=0;i<19;i++){
                     ServoArray[i]->setSkip(true);
-                    delay(5);
                 }
                 taskPhase = 10;//最初のフレームは10から
                 getup_mode = !g_isFaceUp;//0:仰向け 1:うつ伏せ
@@ -2308,7 +2218,6 @@ namespace motion {
                 taskPhase = 0;
                 for(int i=0;i<19;i++){
                     ServoArray[i]->setSkip(false);
-                    delay(5);
                 }
                 return false;
                 break;
@@ -2319,8 +2228,11 @@ namespace motion {
 
     bool getUp_prone::motionLoop(){
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         // モーション構造体定義
         struct MotionStep {
@@ -2329,12 +2241,13 @@ namespace motion {
         };
 
         // PROGMEM配置（関数呼び出し間で保持するため static const を付与）
+        // 角度は論理角[deg]（オフセット差し引き後）。旧データ(生角度)は既定オフセットで変換済み。
         static const MotionStep motionData[] PROGMEM = {
-            /* 0: posZero   */ {30, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
-            /* 1:    */        {20, {0.64,-101.55,3.37,90.21,-34.96,-83.23,-2.84,89.24,-10.73,-4.49,-21.60,74.55,-90.65,-16.67,14.78,28.11,76.44,77.29,20.76}},
-            /*              */ {20, {0.64,-91.83,-5.16,-6.21,-4.42,-88.69,3.00,165.68,1.92,7.32,-1.49,71.35,-94.80,0.00,18.06,6.78,76.78,79.72,9.15}},
-            /*              */ {120, {-9.99,-85.35,71.45,-0.47,-4.76,-93.22,-65.75,165.34,1.62,6.99,-1.49,71.68,-95.14,-0.30,18.06,6.45,76.44,80.02,8.84}},
-            /* 6: posZero   */ { 0, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}}
+            /* 0: posZero   */ {30, {0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}},
+            /* 1:    */        {20, {0.64,-101.55,3.37,90.21,-34.96,-83.23,-2.84,89.24,-10.73,-4.49,-27.54,67.46,-100.00,-20.05,14.78,25.58,83.22,84.07,13.34}},
+            /*              */ {20, {0.64,-91.83,-5.16,-6.21,-4.42,-88.69,3.00,165.68,1.92,7.32,-7.43,64.26,-104.15,-3.38,18.06,4.25,83.56,86.50,1.72}},
+            /*              */ {120, {-9.99,-85.35,71.45,-0.47,-4.76,-93.22,-65.75,165.34,1.62,6.99,-7.43,64.59,-104.49,-3.67,18.06,3.92,83.22,86.80,1.41}},
+            /* 6: posZero   */ { 0, {0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}}
         };
 
         const int arrNum = sizeof(motionData) / sizeof(motionData[0]);
@@ -2383,8 +2296,11 @@ namespace motion {
 
     bool getUp_supine::motionLoop() {
         static int taskPhase = 0;
+        MOTION_STATIC_RESET(taskPhase, 0);
         static int currentStep = 0;
+        MOTION_STATIC_RESET(currentStep, 0);
         static int arrIndex = 0;
+        MOTION_STATIC_RESET(arrIndex, 0);
 
         // モーション構造体定義
         struct MotionStep {
@@ -2393,15 +2309,16 @@ namespace motion {
         };
 
         // PROGMEM配置（関数呼び出し間で保持するため static const を付与）
+        // 角度は論理角[deg]（オフセット差し引き後）。旧データ(生角度)は既定オフセットで変換済み。
         static const MotionStep motionData[] PROGMEM = {
-            /* 0: posZero   */ {30, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}},
-            /* 1: posSupine */ {30, {0.00, -71.42, 100.95, 58.42, -90.82, 61.66, 90.45, -51.30, -85.22, 2.77, -4.18, -8.30, -6.92, -4.25, 14.48, 5.80, -1.62, -0.44, 13.67}},
-            /*    支援      */ {25, {0.00,-4.86,102.53,35.98,-33.65,-3.14,91.70,-52.28,43.67,-3.14,-75.77,21.06,-96.73,-76.34,14.14,80.05,25.04,79.72,82.28}}, 
-            /* 2: posTar1   */ {25, {0.00, -56.40, 1.45, 9.25, -129.74, 32.30, -3.51, 9.25, -119.31, 23.93, -90.82, 22.07, -99.93, -84.04, 11.88, 91.33, 4.25, 90.04, 99.09}},
-            /* 3: posTar2   */ //{25, {0.00, 35.98, 30.21, 46.37, 0.81, -19.81, 39.05, -57.81, 6.51, 3.41, -93.08, -11.58, -90.96, -84.04, 8.94, 91.97, -6.92, 80.02, 98.75}},
-            /* 4: posTar3   */ {120, {0.00, -75.60, 21.16, 28.15, -75.63, 29.67, 23.12, 31.39, -57.95, -11.47, -94.37, 37.66, -98.96, -93.01, 23.25, 92.61, 42.83, 84.27, 91.33}},
-            /* 5: posTar4   */ {120, {0.00, -25.41, 33.45, 9.59, 21.67, 4.93, 36.48, 22.61, -15.63, 2.77, -0.13, 75.84, -51.17, -1.62, 11.21, 30.37, 62.61, 49.34, 32.03}},
-            /* 6: posZero   */ { 0, {0.00, 4.000, 80.00, -16.00, -130.00, 00.00, 70.00, 33.000, -130.00, -0.81, -4.83, 32.03, -25.01, -3.91, 15.46, 10.33, 32.94, 15.63, 10.77}}
+            /* 0: posZero   */ {30, {0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}},
+            /* 1: posSupine */ {30, {0.00,-71.42,100.95,58.42,-90.82,61.66,90.45,-51.30,-85.22,2.77,-10.12,-15.39,-16.27,-7.62,14.48,3.27,5.16,6.34,6.24}},
+            /*    支援      */ {25, {0.00,-4.86,102.53,35.98,-33.65,-3.14,91.70,-52.28,43.67,-3.14,-81.71,13.97,-106.08,-79.72,14.14,77.52,31.82,86.50,74.86}}, 
+            /* 2: posTar1   */ {25, {0.00,-56.40,1.45,9.25,-129.74,32.30,-3.51,9.25,-119.31,23.93,-96.76,14.98,-109.28,-87.42,11.88,88.80,11.03,96.82,91.67}},
+            /* 3: posTar2   */ //{25, {0.00,35.98,30.21,46.37,0.81,-19.81,39.05,-57.81,6.51,3.41,-99.02,-18.67,-100.31,-87.42,8.94,89.44,-0.14,86.80,91.33}},
+            /* 4: posTar3   */ {120, {0.00,-75.60,21.16,28.15,-75.63,29.67,23.12,31.39,-57.95,-11.47,-100.31,30.57,-108.31,-96.39,23.25,90.08,49.61,91.05,83.91}},
+            /* 5: posTar4   */ {120, {0.00,-25.41,33.45,9.59,21.67,4.93,36.48,22.61,-15.63,2.77,-6.07,68.75,-60.52,-5.00,11.21,27.84,69.39,56.12,24.61}},
+            /* 6: posZero   */ { 0, {0.00,4.000,80.00,-16.00,-130.00,00.00,70.00,33.000,-130.00,-0.81,-10.77,24.94,-34.36,-7.29,15.46,7.80,39.72,22.41,3.34}}
         };
 
         const int arrNum = sizeof(motionData) / sizeof(motionData[0]);
@@ -2453,10 +2370,11 @@ namespace motion {
         Dualshock4.sendToController();
 
         static int count = 0;
+
+        MOTION_STATIC_RESET(count, 0);
         if(count>G_fps*4){
             for (int i = 0; i < 19; i++) {
-                ServoArray[i]->setStretch(stretch);
-                delay(1);
+                ServoArray[i]->setStretch(axisStretch(i));
             }
             count=0;
         }else{
@@ -2467,57 +2385,67 @@ namespace motion {
         return false;
     }
 
+    // デバッグモード（PSボタン）: ○で FREE ⇔ その場で保持 を切り替え、×で終了。
+    // 旧実装は while + delay(1500) でメインループごと止めていた（BLE応答・IMU・ACKも停止）。
+    // 1周期ずつ進めるように変更。表示する角度は論理角（オフセット差し引き後）で、
+    // 出力される {...} はそのまま motion_sub 用のモーションテーブルに貼れる。
     bool LOCK_DebugMode::motionLoop(){
-        Serial.printf("DebugMode! comand!\n");
-        float armAngle_set[19];
-        bool free_mode = true;
+        static int phase = 0;
+        MOTION_STATIC_RESET(phase, 0);
+        static bool freeMode = true;
+        MOTION_STATIC_RESET(freeMode, true);
+        static bool prevCircle = false;
+        MOTION_STATIC_RESET(prevCircle, false);
+        static uint32_t lastPrintMs = 0;
+        MOTION_STATIC_RESET(lastPrintMs, 0);
 
-        bool push_circle = Dualshock4.data.button.circle;
-
-        while(!Dualshock4.data.button.cross && !g_teachModeActive){
-            Serial.printf("DebugMode!\n");
-
-            if(push_circle==0 && Dualshock4.data.button.circle==1){
-                free_mode = !free_mode;
+        switch (phase) {
+        case 0:
+            Serial.printf("DebugMode! comand!\n");
+            freeMode = true;
+            prevCircle = Dualshock4.data.button.circle;
+            for (int i = 0; i < 19; i++) ServoArray[i]->setPosFree();
+            lastPrintMs = millis();
+            phase = 1;
+            return true;
+        case 1: {
+            if (Dualshock4.data.button.cross) {
+                phase = 0;
+                return false;
             }
-            push_circle=Dualshock4.data.button.circle;
-
-            if(free_mode){
-                for(int i = 0;i < 19;i++){
-                    delay(5);
-                    auto returnData = ServoArray[i]->setPosFree().getPosDeg();
-                    Serial.printf("[%s]:%f (%s)\n",ServoArray_name[i],returnData.value,returnData.error_msg);
-                    delay(5);
+            const bool circle = Dualshock4.data.button.circle;
+            if (!prevCircle && circle) {
+                freeMode = !freeMode;
+                for (int i = 0; i < 19; i++) {
+                    long raw;
+                    if (freeMode) ServoArray[i]->setPosFree();
+                    else if (servoBus::getFb(i, raw, 500)) ServoArray[i]->setPos(raw, false);  // 今の位置で保持
                 }
-                Serial.print("{");
-                for(int i = 0;i < 19;i++){
-                    delay(5);
-                    auto returnData = ServoArray[i]->setPosFree().getPosDeg();
-                    if(i!=0)Serial.print(",");
-                    Serial.print(returnData.value);
-                    armAngle_set[i]=returnData.value;
-                    delay(5);
+            }
+            prevCircle = circle;
+            servoBus::requestFb(ALL_AXIS_MASK);
+
+            const uint32_t interval = freeMode ? 1500 : 1000;
+            if (millis() - lastPrintMs >= interval) {
+                lastPrintMs = millis();
+                Serial.print(freeMode ? "DebugMode(FREE) {" : "DebugMode(HOLD) {");
+                for (int i = 0; i < 19; i++) {
+                    long raw;
+                    if (i != 0) Serial.print(",");
+                    if (servoBus::getFb(i, raw, 1000)) {
+                        Serial.print(servoICS::fromIcs_toDeg(ServoArray[i]->toLogicalIcs(raw)));
+                    } else {
+                        Serial.print("nan");
+                    }
                 }
                 Serial.println("}");
-
-                delay(1500);
-                Serial.println("---");
-            }else{
-                for(int i=0;i<19;i++){
-                    ServoArray[i]->setPosDeg(armAngle_set[i],false);
-                    delay(5);
-                }
-                Serial.println("{");
-                for(int i = 0;i < 19;i++){
-                    if(i!=0)Serial.print(",");
-                    Serial.print(armAngle_set[i]);
-                }
-                Serial.println("}");
-                delay(1000);
             }
+            return true;
         }
-
-        return false;
+        default:
+            phase = 0;
+            return false;
+        }
     }
 
     bool pose::motionLoop() {
@@ -2550,7 +2478,11 @@ namespace motion {
 
         static int taskDelay=0;
 
+        MOTION_STATIC_RESET(taskDelay, 0);
+
         static int taskPhase=0;
+
+        MOTION_STATIC_RESET(taskPhase, 0);
         switch (taskPhase)
         {
         case 0:
@@ -2610,305 +2542,135 @@ namespace motion {
 
 
     
-    bool ServoStateDeBug::motionLoop(){
-        if (!deviceConnected) {
-            return false;
-        }
+    // ServoStateDeBug / TeachingMode は RobotController（テレメトリ）と下記の教示処理に置き換えた。
 
-        // 1フレーム = [frameNo:2byte][servo0..18: 19 * 2byte] = 40byte
-        // 全19軸の順番は固定なので、サーボIDは毎回送信しない。
-        // 各位置値は符号なし16bit、リトルエンディアン。
-        static uint16_t frameNumber = 0;
-        uint8_t txBuffer[40];
+}
 
-        txBuffer[0] = static_cast<uint8_t>(frameNumber & 0xFF);
-        txBuffer[1] = static_cast<uint8_t>((frameNumber >> 8) & 0xFF);
+// ==============================================================
+// 教示(TEACH / 同期)モード
+//  - BLE callback: 最新値優先のメールボックスへ置くだけ（軸指令は未処理分をマージ）。
+//  - loop: 指令を論理値で setPos() するだけ。滑らかさは ServoBus のスムージング（TEACH中ON）が担う。
+//  - 座標指令はマイコン側でIK。到達不可/範囲外なら直前の姿勢を保持し、エラー軸として通知。
+// ==============================================================
+namespace {
+struct TeachAxis { uint32_t cmd; uint32_t fb; uint16_t v[19]; };
+struct TeachPose { float v[6]; uint8_t ik; };   // X,Y,Z[mm], Roll,Pitch,Yaw[rad]
 
-        for (int i = 0; i < 19; ++i) {
-            uint16_t pos = 0;
-            if (ServoArray[i] != nullptr) {
-                pos = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
-            }
+portMUX_TYPE g_tMux = portMUX_INITIALIZER_UNLOCKED;
+TeachAxis g_tAxis = {};
+bool g_tAxisValid = false;
+TeachPose g_tPose[2] = {};
+bool g_tPoseValid[2] = {false, false};
+uint32_t g_tFbMask = 0;
+uint32_t g_tErr = 0;
 
-            const int offset = 2 + i * 2;
-            txBuffer[offset]     = static_cast<uint8_t>(pos & 0xFF);
-            txBuffer[offset + 1] = static_cast<uint8_t>((pos >> 8) & 0xFF);
-        }
+void teachClear() {
+    portENTER_CRITICAL(&g_tMux);
+    g_tAxisValid = false;
+    g_tPoseValid[0] = g_tPoseValid[1] = false;
+    portEXIT_CRITICAL(&g_tMux);
+    g_tFbMask = 0;
+    g_tErr = 0;
+}
 
-        sendBLE(txBuffer, sizeof(txBuffer));
-        ++frameNumber; // uint16_tなので65535の次は0に戻る
-
-        return false; // 次のメインループで次フレームを生成する
+bool teachApplyPose(int f, const TeachPose& c) {
+    const FootController::Pose pose = {c.v[0], c.v[1], c.v[2], c.v[3], c.v[4], c.v[5]};
+    long out[5];
+    if (!footIk(f, pose, c.ik, out)) {
+        g_tErr |= FOOT_MASK[f];   // 到達不可/範囲外。直前の姿勢を保持
+        return false;
     }
+    for (int k = 0; k < 5; ++k) ServoArray[FOOT_BASE[f] + k]->setPos(out[k], true);
+    g_tErr &= ~FOOT_MASK[f];
+    return true;
+}
+} // namespace
 
-    // ----------------------------------------------------------------
-    // 同期(TX)モードの1周期処理。ブロッキングせず、毎周期:
-    //  1. メールボックスから最新の軸/座標指令を取り出す
-    //  2. 座標指令はマイコン側でIK計算 → 軸目標(絶対ICS)へ変換
-    //  3. 全軸の目標へ一次遅れ+速度制限で滑らかに追従して出力（PC側の送信間隔が
-    //     揺れても動きが階段状にならない）
-    //  4. FB要求軸を1周期1軸ずつ読む（1軸の応答待ちで全体が止まらない）
-    //  5. 全軸の現在値+エラーを 42B [0x01][Err:3B][19*2B] で返す（変化時/250ms毎）
-    // ----------------------------------------------------------------
-    namespace {
-    constexpr float    TEACH_ALPHA = 0.35f;        // 追従係数(0..1)。大きいほど機敏
-    constexpr float    TEACH_MAX_STEP = 600.0f;    // 1周期あたりの最大移動量[ICS]
-    constexpr uint32_t TEACH_HEARTBEAT_MS = 250;
-    constexpr uint32_t TEACH_AXIS_GAP_MS = 1;      // UART送信後の待ち。0〜2で調整
-    constexpr int      TEACH_ICS_MIN = 3500;
-    constexpr int      TEACH_ICS_MAX = 11500;
-    constexpr uint8_t  TEACH_FOOT_FIRST[2] = {9, 14};          // 左足/右足の先頭サーボID
-    constexpr uint32_t TEACH_FOOT_MASK[2] = {0x3E00UL, 0x7C000UL}; // bit9..13 / bit14..18
-
-    float    g_tCur[19];
-    float    g_tTarget[19];
-    uint32_t g_tHasTarget = 0;
-    int32_t  g_tLastSent[19];
-    uint32_t g_tIkErr = 0;
-    uint32_t g_tFbErr = 0;
-    uint32_t g_tFbMask = 0;
-    uint32_t g_tFbValid = 0;
-    uint16_t g_tFbIcs[19];
-    uint8_t  g_tFbRR = 0;
-    // setPos()系の値 → 絶対ICSへの差分。最初の座標指令で学習する（足軸のみ）。
-    int32_t  g_tDelta[19];
-    uint32_t g_tDeltaKnown = 0;
-    uint8_t  g_tLastResp[42];
-    bool     g_tRespValid = false;
-    uint32_t g_tLastRespMs = 0;
-
-    void teachReset() {
-        g_tHasTarget = 0;
-        g_tIkErr = 0;
-        g_tFbErr = 0;
-        g_tFbMask = 0;
-        g_tFbValid = 0;
-        g_tFbRR = 0;
-        g_tRespValid = false;
-        for (int i = 0; i < 19; ++i) {
-            g_tCur[i] = 0;
-            g_tTarget[i] = 0;
-            g_tLastSent[i] = -1;
-            g_tFbIcs[i] = 0;
-        }
+bool teachPostAxis(const uint8_t* p, size_t len) {
+    if (p == nullptr || len != 44) return false;    // [cmd:3][fb:3][19*u16]
+    const uint32_t cmd = rdU24(p) & ALL_AXIS_MASK;
+    const uint32_t fb = rdU24(p + 3) & ALL_AXIS_MASK;
+    portENTER_CRITICAL(&g_tMux);
+    if (!g_tAxisValid) {
+        g_tAxis.cmd = 0;
+        g_tAxisValid = true;
     }
-
-    inline bool validIcs(int32_t v) { return v >= TEACH_ICS_MIN && v <= TEACH_ICS_MAX; }
-
-    void teachSetTarget(int i, float t) {
-        const uint32_t bit = (1UL << i);
-        if (!(g_tHasTarget & bit)) {
-            // 現在のサーボ位置から滑らかに動かし始める。現在位置が不明ならその場で目標へ。
-            const int32_t last = static_cast<int32_t>(ServoArray[i]->getLastSetPosIcs());
-            if (validIcs(last)) {
-                g_tCur[i] = static_cast<float>(last);
-                g_tLastSent[i] = last;
-            } else {
-                g_tCur[i] = t;
-                g_tLastSent[i] = -1;
-            }
-            g_tHasTarget |= bit;
-        }
-        g_tTarget[i] = t;
+    for (int i = 0; i < 19; ++i) {
+        if (cmd & (1UL << i)) g_tAxis.v[i] = rdU16(p + 6 + i * 2);
     }
+    g_tAxis.cmd |= cmd;
+    g_tAxis.fb = fb;
+    portEXIT_CRITICAL(&g_tMux);
+    return true;
+}
 
-    void teachFree(int i) {
-        ServoArray[i]->setPosFree();
-        g_tHasTarget &= ~(1UL << i);
-        g_tLastSent[i] = -1;
+bool teachPostPose(const uint8_t* p, size_t len) {
+    if (p == nullptr || len != 26 || p[0] > 1) return false;   // [foot][ik][6*f32]
+    TeachPose c;
+    c.ik = p[1] ? 1 : 0;
+    memcpy(c.v, p + 2, sizeof(c.v));
+    for (int i = 0; i < 6; ++i) if (!std::isfinite(c.v[i])) return false;
+    for (int i = 0; i < 3; ++i) if (fabsf(c.v[i]) > 400.0f) return false;
+    if (fabsf(c.v[3]) > 1.6f || fabsf(c.v[5]) > 1.6f) return false;
+    c.v[4] = 0.0f;   // Pitchは現行IKでは未使用
+    portENTER_CRITICAL(&g_tMux);
+    g_tPose[p[0]] = c;
+    g_tPoseValid[p[0]] = true;
+    portEXIT_CRITICAL(&g_tMux);
+    return true;
+}
+
+void teachEnter() { teachClear(); }
+void teachExit() { teachClear(); }
+uint32_t teachErrorMask() { return g_tErr; }
+
+bool teachNeutral(uint8_t f) {
+    if (f > 1) return false;
+    TeachPose n;
+    // 通常の pose モーションと同じ値（左右差補正 footPoseDef を含む）
+    n.v[0] = NeutralPoseY + (f == 0 ? footPoseDefLeft : footPoseDefRight);   // X(上下)
+    n.v[1] = (f == 0) ? -NeutralSpac : NeutralSpac;                           // Y(左右)
+    n.v[2] = NeutralPoseX;                                                    // Z(前後)
+    n.v[3] = n.v[4] = n.v[5] = 0.0f;
+    n.ik = 0;
+    const bool ok = teachApplyPose(f, n);
+    uint8_t e[25];
+    e[0] = f;
+    memcpy(e + 1, n.v, sizeof(n.v));
+    sendPacket(proto::POSE_ECHO, e, sizeof(e));
+    return ok;
+}
+
+void teachUpdate() {
+    TeachAxis ax;
+    bool hasAxis = false;
+    TeachPose pose[2];
+    bool hasPose[2] = {false, false};
+    portENTER_CRITICAL(&g_tMux);
+    if (g_tAxisValid) { ax = g_tAxis; hasAxis = true; g_tAxisValid = false; }
+    for (int f = 0; f < 2; ++f) {
+        if (g_tPoseValid[f]) { pose[f] = g_tPose[f]; hasPose[f] = true; g_tPoseValid[f] = false; }
     }
+    portEXIT_CRITICAL(&g_tMux);
 
-    bool teachApplyPose(int f, const TeachPoseCmd& pc) {
-        FootController& foot = (f == 0) ? leftFoot : rightFoot;
-        const int base = TEACH_FOOT_FIRST[f];
-        const uint32_t fmask = TEACH_FOOT_MASK[f];
-        FootController::Pose pose = {pc.v[0], pc.v[1], pc.v[2], pc.v[3], pc.v[4], pc.v[5]};
-        long out[5];
-        if (!foot.computeJointPos(pose, 0.0f, pc.mode, out)) {
-            g_tIkErr |= fmask;   // 到達不可。直前の姿勢を保持してPCへエラー通知
-            return false;
-        }
-        for (int k = 0; k < 5; ++k) {
-            if (ServoArray[base + k] == nullptr) { g_tIkErr |= fmask; return false; }
-        }
-
-        if ((g_tDeltaKnown & fmask) == fmask) {
-            int32_t absT[5];
-            for (int k = 0; k < 5; ++k) {
-                absT[k] = static_cast<int32_t>(out[k]) + g_tDelta[base + k];
-                if (!validIcs(absT[k])) { g_tIkErr |= fmask; return false; }
-            }
-            g_tIkErr &= ~fmask;
-            for (int k = 0; k < 5; ++k) teachSetTarget(base + k, static_cast<float>(absT[k]));
-        } else {
-            // 初回のみ: ライブラリ経由で直接指令し、実際に設定された絶対ICSとの差分を学習する。
-            g_tIkErr &= ~fmask;
-            foot.setJointAngles(out[0], out[1], out[2], out[3], out[4]);
-            delay(5);
-            bool ok = true;
-            int32_t last[5];
-            for (int k = 0; k < 5; ++k) {
-                last[k] = static_cast<int32_t>(ServoArray[base + k]->getLastSetPosIcs());
-                if (!validIcs(last[k])) ok = false;
-            }
-            if (ok) {
-                for (int k = 0; k < 5; ++k) {
-                    const int i = base + k;
-                    g_tDelta[i] = last[k] - static_cast<int32_t>(out[k]);
-                    g_tCur[i] = g_tTarget[i] = static_cast<float>(last[k]);
-                    g_tLastSent[i] = last[k];
-                    g_tHasTarget |= (1UL << i);
-                }
-                g_tDeltaKnown |= fmask;
-                Serial.printf("[TEACH] foot%d IK offset learned: %ld %ld %ld %ld %ld\n", f,
-                    (long)g_tDelta[base], (long)g_tDelta[base + 1], (long)g_tDelta[base + 2],
-                    (long)g_tDelta[base + 3], (long)g_tDelta[base + 4]);
-            }
-        }
-        return true;
-    }
-    } // namespace
-
-    bool TeachingMode::motionLoop() {
-        if (!deviceConnected || !g_teachModeActive) return false;
-
-        // --- 1. メールボックス取り出し ---
-        TeachAxisCmd axis;
-        bool hasAxis = false;
-        TeachPoseCmd poses[2];
-        bool hasPose[2] = {false, false};
-        bool neutral[2] = {false, false};
-        bool reset = false;
-        portENTER_CRITICAL(&g_teachCmdMux);
-        reset = g_teachNeedReset;
-        g_teachNeedReset = false;
-        if (g_axisPendingValid) {
-            axis = g_axisPending;
-            hasAxis = true;
-            g_axisPendingValid = false;
-        }
-        for (int f = 0; f < 2; ++f) {
-            if (g_posePendingValid[f]) {
-                poses[f] = g_posePending[f];
-                hasPose[f] = true;
-                g_posePendingValid[f] = false;
-            }
-            neutral[f] = g_poseNeutralReq[f];
-            g_poseNeutralReq[f] = false;
-        }
-        g_teachCmdPending = false;
-        portEXIT_CRITICAL(&g_teachCmdMux);
-
-        if (reset) teachReset();
-
-        // --- 2. 軸指令 ---
-        if (hasAxis) {
-            g_tFbMask = axis.fbMask;
-            for (int i = 0; i < 19; ++i) {
-                const uint32_t bit = (1UL << i);
-                if (!(axis.cmdMask & bit)) continue;
-                if (ServoArray[i] == nullptr) { g_tFbErr |= bit; continue; }
-                if (axis.ics[i] == 0) {
-                    teachFree(i);
-                } else {
-                    int32_t v = axis.ics[i];
-                    if (v < TEACH_ICS_MIN) v = TEACH_ICS_MIN;
-                    if (v > TEACH_ICS_MAX) v = TEACH_ICS_MAX;
-                    teachSetTarget(i, static_cast<float>(v));
-                }
-            }
-        }
-
-        // --- 3. 座標(IK)指令 ---
-        for (int f = 0; f < 2; ++f) {
-            if (neutral[f]) {
-                TeachPoseCmd n;
-                n.v[0] = static_cast<float>(NeutralPoseY);                              // X(上下)
-                n.v[1] = (f == 0) ? -static_cast<float>(NeutralSpac) : static_cast<float>(NeutralSpac); // Y(左右)
-                n.v[2] = static_cast<float>(NeutralPoseX);                              // Z(前後)
-                n.v[3] = n.v[4] = n.v[5] = 0.0f;
-                n.mode = 0;
-                teachApplyPose(f, n);
-                uint8_t echo[26];
-                echo[0] = 0x37;
-                echo[1] = static_cast<uint8_t>(f);
-                memcpy(echo + 2, n.v, sizeof(n.v));
-                sendBLE(echo, sizeof(echo));
-            } else if (hasPose[f]) {
-                teachApplyPose(f, poses[f]);
-            }
-        }
-
-        // --- 4. 目標への滑らかな追従出力 ---
+    if (hasAxis) {
+        g_tFbMask = ax.fb;
         for (int i = 0; i < 19; ++i) {
             const uint32_t bit = (1UL << i);
-            if (!(g_tHasTarget & bit) || ServoArray[i] == nullptr) continue;
-            const float diff = g_tTarget[i] - g_tCur[i];
-            if (fabsf(diff) <= 1.0f) {
-                g_tCur[i] = g_tTarget[i];
+            if (!(ax.cmd & bit)) continue;
+            servoICS::Servo* s = ServoArray[i];
+            if (s == nullptr) { g_tErr |= bit; continue; }
+            if (ax.v[i] == 0) {
+                s->setPosFree();
+                g_tErr &= ~bit;
             } else {
-                float step = diff * TEACH_ALPHA;
-                if (fabsf(step) < 1.0f) step = (diff > 0) ? 1.0f : -1.0f;
-                if (step > TEACH_MAX_STEP) step = TEACH_MAX_STEP;
-                if (step < -TEACH_MAX_STEP) step = -TEACH_MAX_STEP;
-                g_tCur[i] += step;
-            }
-            const int32_t v = static_cast<int32_t>(lroundf(g_tCur[i]));
-            if (v != g_tLastSent[i]) {
-                ServoArray[i]->setPosIcs(static_cast<uint16_t>(v), false);
-                g_tLastSent[i] = v;
-                if (TEACH_AXIS_GAP_MS) delay(TEACH_AXIS_GAP_MS);
+                s->setPos(ax.v[i], true);   // 論理値。範囲外ならservoICSが拒否（直前の目標を保持）
+                if (s->returnStatus().success) g_tErr &= ~bit; else g_tErr |= bit;
             }
         }
-
-        // --- 5. FB読み取り（1周期1軸のラウンドロビン） ---
-        g_tFbValid &= g_tFbMask;
-        g_tFbErr &= (g_tFbMask | g_tIkErr); // 解除されたFB要求のエラーは消す
-        if (g_tFbMask) {
-            for (int n = 0; n < 19; ++n) {
-                g_tFbRR = static_cast<uint8_t>((g_tFbRR + 1) % 19);
-                const int i = g_tFbRR;
-                const uint32_t bit = (1UL << i);
-                if (!(g_tFbMask & bit) || ServoArray[i] == nullptr) continue;
-                auto r = ServoArray[i]->getPosIcs();
-                if (r.success) {
-                    g_tFbIcs[i] = static_cast<uint16_t>(r.value);
-                    g_tFbValid |= bit;
-                    g_tFbErr &= ~bit;
-                } else {
-                    g_tFbValid &= ~bit;
-                    g_tFbErr |= bit;
-                }
-                break;
-            }
-        }
-
-        // --- 6. 応答 [0x01][Err:3B][19*2B] ---
-        uint8_t resp[42] = {0};
-        resp[0] = 0x01;
-        const uint32_t err = (g_tIkErr | g_tFbErr) & TEACH_ALL_MASK;
-        resp[1] = static_cast<uint8_t>(err & 0xFF);
-        resp[2] = static_cast<uint8_t>((err >> 8) & 0xFF);
-        resp[3] = static_cast<uint8_t>((err >> 16) & 0xFF);
-        for (int i = 0; i < 19; ++i) {
-            uint16_t v = 0;
-            if (ServoArray[i] != nullptr) {
-                if (g_tFbValid & (1UL << i)) v = g_tFbIcs[i];
-                else v = static_cast<uint16_t>(ServoArray[i]->getLastSetPosIcs());
-            }
-            resp[4 + i * 2] = static_cast<uint8_t>(v & 0xFF);
-            resp[5 + i * 2] = static_cast<uint8_t>((v >> 8) & 0xFF);
-        }
-        const uint32_t now = millis();
-        if (!g_tRespValid || memcmp(resp, g_tLastResp, sizeof(resp)) != 0 ||
-            (now - g_tLastRespMs) >= TEACH_HEARTBEAT_MS) {
-            memcpy(g_tLastResp, resp, sizeof(resp));
-            g_tRespValid = true;
-            g_tLastRespMs = now;
-            sendBLE(resp, sizeof(resp));
-        }
-        return false; // 常駐処理ではなく毎周期の呼び出し。ALL_BITは占有しない。
     }
-
-    /*****ここまで***** */
+    for (int f = 0; f < 2; ++f) {
+        if (hasPose[f]) teachApplyPose(f, pose[f]);
+    }
+    servoBus::requestFb(g_tFbMask);
 }

@@ -1,17 +1,11 @@
-#include "Declaration.h"
-#include "AssistiveProgram.h"
 #include "Config.h"
 #include "Motion.h"
+#include "RobotController.h"
+#include "servoICS.h"
 #include <Wire.h>
-
-#include "BLEManager.h"
-
-// Motion.cppで定義される教示制御状態。BLEの実装詳細はBLEManager.cppに隔離する。
-extern volatile bool g_teachCmdPending;
-extern volatile bool g_teachModeActive;
-extern bool uploadedMotionOwnsRobot();
-extern bool uploadedMotionEmergencyLatched();
-extern void processUploadedMotion();
+#ifndef SIMULATION
+#include <driver/uart.h>
+#endif
 
 // MPU6886 I2C設定
 #define MPU6886_ADDRESS 0x68
@@ -142,63 +136,32 @@ bool runExclusiveTask(motionBase* motion) {
     return false; // 他のタスクが占有中、または起動条件を満たさないため実行不可
 }
 
+// モードごとの処理。モードの遷移そのものは ctrl::update()（RobotController）が行う。
 void taskManager() {
-    static bool wasTeachingMode = false;
-
-    // PCから全フレーム受信済みのモーションを最優先で実行する。
-    // 再生中は既存モーションを停止して全軸を占有し、BLEへ1フレームずつ送らない。
-    if (uploadedMotionOwnsRobot()) {
-        for (int i = 0; i < motionList::motionArrNum; ++i) {
-            motionList::motionArr[i]->isActive = false;
-        }
+    static uint8_t prevMode = 0xFF;
+    const uint8_t mode = ctrl::mode();
+    if (mode != prevMode) {
+        // モードが変わったら部位の占有も解放（モーションの中断は ctrl 側で済んでいる）
         g_usingPartsBit = 0;
-        wasTeachingMode = false;
-        processUploadedMotion();
-        return;
+        prevMode = mode;
     }
 
-    // 緊急停止後は自律モーションをラッチ停止。PCが明示的にTX教示を開始すれば手動制御は許可する。
-    if (uploadedMotionEmergencyLatched()) {
+    switch (mode) {
+    case proto::MODE_PLAYBACK:
+        if (!playbackUpdate()) ctrl::playbackFinished();
+        break;
+    case proto::MODE_TEACH:
+        teachUpdate();
+        break;
+    case proto::MODE_ESTOP:
+        // 緊急停止中: 自律モーションは動かさない（FREEにした軸以外はその場で保持）
+        break;
+    case proto::MODE_AUTO:
+    default:
         for (int i = 0; i < motionList::motionArrNum; ++i) {
-            motionList::motionArr[i]->isActive = false;
+            runExclusiveTask(motionList::motionArr[i]);
         }
-        g_usingPartsBit = 0;
-        wasTeachingMode = false;
-        if (g_teachModeActive && deviceConnected) {
-            motion::TeachingMode_inst.motionLoop();
-        } else if (!g_teachModeActive && deviceConnected) {
-            // 緊急停止ラッチ中でもRX表示用テレメトリは継続する。
-            // 通常の自律モーションは再開しない。
-            motion::ServoStateDeBug_inst.motionLoop();
-        }
-        return;
-    }
-
-    // 教示中は他のモーションを停止・抑止し、毎周期ノンブロッキングで教示処理を進める。
-    if (g_teachModeActive && deviceConnected) {
-        if (!wasTeachingMode) {
-            for (int i = 0; i < motionList::motionArrNum; ++i) {
-                motionList::motionArr[i]->isActive = false;
-            }
-            g_usingPartsBit = 0;
-            wasTeachingMode = true;
-        }
-
-        // 指令の有無に関わらず毎周期呼ぶ（スムージング出力・FB・応答送信を継続するため）。
-        motion::TeachingMode_inst.motionLoop();
-        return; // この間は通常モーションと定期テレメトリを動かさない。
-    }
-
-    if (wasTeachingMode) {
-        for (int i = 0; i < motionList::motionArrNum; ++i) {
-            motionList::motionArr[i]->isActive = false;
-        }
-        g_usingPartsBit = 0;
-        wasTeachingMode = false;
-    }
-
-    for (int i = 0; i < motionList::motionArrNum; ++i) {
-        runExclusiveTask(motionList::motionArr[i]);
+        break;
     }
 }
 
@@ -210,6 +173,11 @@ void setup() {
     // 返り値がないサーボ1軸あたりの待ち時間。ICSの返信は1ms程度で来るので10msで十分。
     // （旧100msだと、応答しない軸のFBを読むたびに制御周期が100ms止まっていた）
     Serial1.setTimeout(10);
+#ifndef SIMULATION
+    // 受信バイトがソフトから見えるまでの遅れ(RX FIFOタイムアウト)を最小(1文字分≒0.1ms)にする。
+    // 既定(約10文字≒1ms)だとサーボの返信が遅れて見え、返信待ちの判定を誤る原因になる。
+    uart_set_rx_timeout(UART_NUM_1, 1);
+#endif
 
     if (!setupIMU()) {
         Serial.println("IMU Initialization Failed!");
@@ -236,75 +204,31 @@ void setup() {
     }
     Serial.println("PS4 Controller Connected!");
 
-    // ファイルシステムを先に初期化し、BLE接続直後にモーション転送が来ても
-    // LittleFSが未マウントの状態でCOMMITされないようにする。
-    LittleFS_ini();
-    listFiles();
+    // 校正データとモーションはコンパイル時に組み込む（ExportData.h）。
+    // プレビュー用モーションはRAMだけに置くので、LittleFSは使わない（マウントもしない）。
 
-    // ★ 2. PS4接続とLittleFS初期化の完了後にBLE広告を開始
+    // ★ 2. PS4接続の完了後にBLE広告を開始
     setupBLE();
 
     #ifndef SIMULATION
 
-        short ICS_senter[19] = {
-            7500, // [0] hipServo
-            7500, // [1] leftArmJ1
-            7500, // [2] leftArmJ2
-            7500, // [3] leftArmJ3
-            7500, // [4] leftArmJ4
-            7500, // [5] rightArmJ1
-            7500, // [6] rightArmJ2
-            7500, // [7] rightArmJ3
-            7500, // [8] rightArmJ4
-            7500, // [9] leftFoot1
-            7500, // [10] leftFoot2
-            7500, // [11] leftFoot3
-            7500, // [12] leftFoot4
-            7500, // [13] leftFoot5
-            7500, // [14] rightFoot1
-            7500, // [15] rightFoot2
-            7500, // [16] rightFoot3
-            7500, // [17] rightFoot4
-            7500 // [18] rightFoot5
-        };
-
-    short ServoArray_pos[19] = {
-        7500, // [0] hipServo
-        7500, // [1] leftArmJ1
-        7500, // [2] leftArmJ2
-        7500, // [3] leftArmJ3
-        7500, // [4] leftArmJ4
-        7500, // [5] rightArmJ1
-        7500, // [6] rightArmJ2
-        7500, // [7] rightArmJ3
-        7500, // [8] rightArmJ4
-        7500, // [9] leftFoot1
-        7676, // [10] leftFoot2
-        7710, // [11] leftFoot3
-        7777, // [12] leftFoot4
-        7600, // [13] leftFoot5
-        7500, // [14] rightFoot1
-        7575, // [15] rightFoot2
-        7299, // [16] rightFoot3
-        7299, // [17] rightFoot4
-        7720 // [18] rightFoot5
-    };
-
         leftFoot.FootMotorInvert(1, 1, -1, -1, 1);
         rightFoot.FootMotorInvert(1, 1, 1, 1, 1);
 
-        for (int i = 0; i < 19; i++) {
-            ServoArray[i]->setOffsetIcs(ServoArray_pos[i]);
-        }
+        // オフセットと左右差補正は ExportData.h の calib_data から（フラッシュには保存しない）。
+        calib::begin();
         for (int i = 0; i < 19; i++) {
             ServoArray[i]->setStretch(stretch);
             delay(5);
         }
-        ServoArray[13]->setStretch(10);
+        ServoArray[13]->setStretch(10);   // 足首5は柔らかく（モーション中も Motion.cpp の axisStretch() で維持）
         delay(5);
         ServoArray[18]->setStretch(10);
         delay(5);
         ServoArray[0]->setSkip(true);
+
+        // ここから先、サーボへの送信はすべて ServoBus 経由（loop末尾の flush でまとめて送る）
+        servoBus::begin();
     #endif
 
     Dualshock4.setLed(255, 0, 0);
@@ -314,22 +238,31 @@ void setup() {
 }
 
 void loop() {
-    taskManager();
+    ctrl::update();      // BLEからの要求・状態遷移
+    taskManager();       // モードごとの処理（目標値の登録だけ。送信はまだ）
 
-    
     updateIMU();
-
-    // グローバル変数を参照して動作分岐
-    if (g_isFaceUp) {
-        Serial.println(">Status:1");  // 表向き
-    } else {
-        Serial.println(">Status:-1"); // 裏向き
+    {
+        static int lastFace = -2;
+        const int face = g_isFaceUp ? 1 : -1;
+        if (face != lastFace) {          // 旧: 毎周期println。変化時だけにした
+            Serial.println(face > 0 ? ">Status:1" : ">Status:-1");
+            lastFace = face;
+        }
     }
-    
-    // BLE接続状態の監視と切断後のアドバタイズ再開はBLEモジュールに委譲。
-    updateBLE();
 
-    Serial.println(framelim.sync());
+    updateBLE();         // ACK送信・再広告
+
+    // この周期の残り時間を送信予算にする（送り切れない軸は次周期へ。周期は延ばさない）
+    long remainMs = static_cast<long>(framelim.next_target_ms - millis()) - 2;
+    if (remainMs < 3) remainMs = 3;
+    if (remainMs > 20) remainMs = 20;
+    servoBus::flush(static_cast<uint32_t>(remainMs) * 1000UL);
+
+    ctrl::telemetry();   // STATE/FB を20Hzで送信
+
+    const long overrun = framelim.sync();
+    if (overrun > 0) Serial.printf("[LOOP] overrun %ld ms\n", overrun);
 }
 
 namespace loop2_task

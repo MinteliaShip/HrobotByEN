@@ -1,0 +1,233 @@
+{
+ "format": "robot-motions",
+ "version": 5,
+ "units": "logical-ics",
+ "fps": 40,
+ "motions": [
+  {
+   "Name": "Attack_right_motiage",
+   "Desc": "右：中央から40度の位置に持ち上げ攻撃",
+   "Tracks": {
+    "hip": [
+     {
+      "DurationMs": 25,
+      "Mode": 0,
+      "Angles": [
+       7500
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       6019
+      ]
+     },
+     {
+      "Gap": true,
+      "DurationMs": 675
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500
+      ]
+     }
+    ],
+    "r_arm": [
+     {
+      "DurationMs": 25,
+      "Mode": 0,
+      "Angles": [
+       7559,
+       8819,
+       8137,
+       3544
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7379,
+       8903,
+       7496,
+       7491
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7379,
+       6608,
+       7496,
+       7491
+      ]
+     },
+     {
+      "Gap": true,
+      "DurationMs": 175
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7559,
+       8819,
+       8137,
+       3544
+      ]
+     }
+    ],
+    "l_arm": [
+     {
+      "DurationMs": 25,
+      "Mode": 0,
+      "Angles": [
+       7070,
+       9159,
+       7085,
+       3500
+      ]
+     },
+     {
+      "Gap": true,
+      "DurationMs": 2175
+     }
+    ],
+    "r_leg": [
+     {
+      "DurationMs": 25,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       8362,
+       8525,
+       8561,
+       9352
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       7986,
+       9367,
+       7628,
+       7986
+      ],
+      "Pose": {
+       "x": 270,
+       "y": 63.5,
+       "z": -100,
+       "roll": 0,
+       "yaw": 0,
+       "ik": 0
+      }
+     },
+     {
+      "Gap": true,
+      "DurationMs": 675
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       7986,
+       9367,
+       7628,
+       7959
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       8362,
+       8525,
+       8561,
+       7989
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       8362,
+       8525,
+       8561,
+       8362
+      ]
+     }
+    ],
+    "l_leg": [
+     {
+      "DurationMs": 25,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       6567,
+       6282,
+       6241,
+       6819
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       6651,
+       7418,
+       5601,
+       7219
+      ]
+     },
+     {
+      "Gap": true,
+      "DurationMs": 675
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       6651,
+       7418,
+       5601,
+       5781
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       6567,
+       6282,
+       6241,
+       5663
+      ]
+     },
+     {
+      "DurationMs": 500,
+      "Mode": 0,
+      "Angles": [
+       7500,
+       6567,
+       6282,
+       6241,
+       6567
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}
